@@ -4,8 +4,8 @@
    ===================================================================== */
 
 /* ========================= CONFIG ========================= */
-const TURSO_URL = "https://renuit-turso07.aws-ap-south-1.turso.io";
-const TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODYwMTQwODgsImlkIjoiMDE5ZmQ2YjgtNzMwMS03ODEwLWIxZWEtMTM1MDA0MmQ2YjcxIiwia2lkIjoiOXVHTjN5UEplV21vTVF0ME8zb3R4RS16M1RsX2I0akliR3RnckxFaUtfUSIsInJpZCI6IjYyMzBjNDQwLThhNDctNGI1My1iZGIzLTFhZmJjNDI0NTNjYSJ9.bgYsJz-XElQfd3jYSAgWFlMqJNn5vv5ZwHxTRE17L8TWwq88gASnw0vyez6_ZwZz7j9nHpwTKUmKC0rJET3GCA";
+const TURSO_URL = "https://ren-reneuit.aws-ap-south-1.turso.io";
+const TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODc1NjExMzgsImlkIjoiMDFhMDMyZWYtNTUwMS03MDUzLWI4NTMtMDUyYWJiMmUxYjg5Iiwia2lkIjoidXAxUkptTmREX1VfcVUwVTNxWUU5QUxsUnNxQTNZam5IQ2VUc0xKSGZLRSIsInJpZCI6Ijg4MmIyOTY1LWRiYzgtNDczNS1hYTk5LTc2OGZiMmExOGQ0MyJ9.FmIfcVR36MLpovTqvzg3AEos-5BtoRAfusI_DJh6DV_HcbsDAGLUUTdBxpEe92UG1GDlGwF7wuf7YzKgtAw4Cw";
 const DESKTOP_ID = "W1"; // sequence prefix (same convention as desktop Dxx) so web numbers never clash
 
 /* ========================= DB LAYER ========================= */
