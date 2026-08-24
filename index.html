@@ -1,0 +1,68 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1d4ed8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AP Repair CRM</title>
+<link rel="stylesheet" href="style.css?v=5">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231d4ed8'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>A</text></svg>">
+</head>
+<body>
+
+<!-- ============ LOGIN VIEW ============ -->
+<div id="login-view" class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">A</div>
+    <h1>AP Repair CRM</h1>
+    <p class="login-sub">Service Center Management</p>
+    <div class="field">
+      <label>Username</label>
+      <input id="login-user" type="text" autocomplete="username" autocapitalize="none" placeholder="username">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input id="login-pass" type="password" autocomplete="current-password" placeholder="password">
+    </div>
+    <button id="login-btn" class="btn primary block" onclick="doLogin()">Sign In</button>
+    <div id="login-err" class="login-err"></div>
+    <div class="login-foot">Developed by Praveen Itagi &middot; Annapurna Software Solutions</div>
+  </div>
+</div>
+
+<!-- ============ APP VIEW ============ -->
+<div id="app-view" class="app" style="display:none">
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand">AP Repair CRM</div>
+      <div class="user-chip" onclick="toggleUserMenu()">
+        <span id="user-avatar" class="avatar">A</span>
+        <span class="user-meta">
+          <span id="user-name">User</span>
+          <span id="user-role" class="user-role">role</span>
+        </span>
+      </div>
+    </div>
+    <div id="user-menu" class="user-menu" style="display:none">
+      <div id="menu-company" class="menu-company"></div>
+      <button class="menu-item" onclick="refreshAll()">ðŸ”„ Refresh Data</button>
+      <button class="menu-item danger" onclick="doLogout()">â» Logout</button>
+    </div>
+  </header>
+
+  <nav id="nav" class="nav-chips"></nav>
+
+  <main id="content" class="content"></main>
+
+  <div id="toast" class="toast"></div>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div id="modal-backdrop" class="modal-backdrop" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div id="modal" class="modal"></div>
+</div>
+
+<script src="app.js?v=4"></script>
+</body>
+</html>
