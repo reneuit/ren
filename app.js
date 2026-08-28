@@ -65,7 +65,7 @@
    ===================================================================== */
 
 let TURSO_URL = "https://ren-reneuit.aws-ap-south-1.turso.io";
-let TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODc5MjY3NjMsImlkIjoiMDFhMDQ4YmMtZjIwMS03ZjgxLTk3YWUtMTM5OTIxZTA0ZWU1Iiwia2lkIjoidXAxUkptTmREX1VfcVUwVTNxWUU5QUxsUnNxQTNZam5IQ2VUc0xKSGZKRSIsInJpZCI6IjM3NzMwZjUxLTlmNTYtNGQ2NS1iMTE0LTllNzZlZGJmMjNiZCJ9.gdD-bwAdtvtU5scXbCWvcu5DKbUQNPYrXPQ5J70ddZcu795GIQY3IbwGf5DHOlw86N3bWzRY9zLz4aUhPX5UAw";
+let TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODc5MjY3NjMsImlkIjoiMDFhMDQ4YmMtZjIwMS03ZjgxLTk3YWUtMTM5OTIxZTA0ZWU1Iiwia2lkIjoidXAxUkptTmREX1VfcVUwVTNxWUU5QUxsUnNxQTNZam5IQ2VUc0xKSGZLRSIsInJpZCI6IjM3NzMwZjUxLTlmNTYtNGQ2NS1iMTE0LTllNzZlZGJmMjNiZCJ9.gdD-bwAdtvtU5scXbCWvcu5DKbUQNPYrXPQ5J70ddZcu795GIQY3IbwGf5DHOlw86N3bWzRY9zLz4aUhPX5UAw";
 const DESKTOP_ID = "W1";
 try {
   const ovr = localStorage.getItem("turso_override");
