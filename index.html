@@ -2,12 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#1d4ed8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1E40AF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1E3A8A" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AP CRM">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="AP Repair CRM">
+<meta name="format-detection" content="telephone=no">
+<meta name="description" content="AP Repair CRM - Service Center Management">
+
 <title>AP Repair CRM</title>
-<link rel="stylesheet" href="style.css?v=6">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231d4ed8'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>A</text></svg>">
+
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231E40AF'/><text x='50' y='68' font-size='60' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>A</text></svg>">
+
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -35,9 +49,12 @@
 <div id="app-view" class="app" style="display:none">
   <header class="topbar">
     <div class="topbar-row">
-      <div class="brand">AP Repair CRM</div>
+      <div class="brand">
+        <div class="brand-mark">A</div>
+        <span>AP Repair CRM</span>
+      </div>
       <div class="user-chip" onclick="toggleUserMenu()">
-        <span id="user-avatar" class="avatar">A</span>
+        <span id="user-avatar" class="avatar">U</span>
         <span class="user-meta">
           <span id="user-name">User</span>
           <span id="user-role" class="user-role">role</span>
@@ -46,8 +63,8 @@
     </div>
     <div id="user-menu" class="user-menu" style="display:none">
       <div id="menu-company" class="menu-company"></div>
-      <button class="menu-item" onclick="refreshAll()">ðŸ”„ Refresh Data</button>
-      <button class="menu-item danger" onclick="doLogout()">â» Logout</button>
+      <button class="menu-item" onclick="refreshAll()">Refresh Data</button>
+      <button class="menu-item danger" onclick="doLogout()">Logout</button>
     </div>
   </header>
 
@@ -63,6 +80,26 @@
   <div id="modal" class="modal"></div>
 </div>
 
-<script src="app.js?v=6"></script>
+<!-- ============ INSTALL PROMPT ============ -->
+<div id="install-banner" class="install-banner" style="display:none">
+  <div class="icon">A</div>
+  <div class="body">
+    <b>Install AP Repair CRM</b>
+    <p id="install-msg">Get the full app experience on your device.</p>
+  </div>
+  <div class="actions">
+    <button class="btn sm" onclick="dismissInstall()">Not now</button>
+    <button class="btn primary sm" id="install-btn">Install</button>
+  </div>
+</div>
+
+<script src="app.js?v=8"></script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
 </body>
 </html>
