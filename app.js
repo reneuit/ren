@@ -350,53 +350,163 @@ async function doLogin() {
 function doLogout() { localStorage.removeItem("crm_session"); location.reload(); }
 function toggleUserMenu() {
   const m = document.getElementById("user-menu");
+  if (!m) return;
   m.style.display = m.style.display === "none" ? "block" : "none";
 }
 document.addEventListener("click", e => {
   const m = document.getElementById("user-menu");
-  if (m && m.style.display === "block" && !e.target.closest(".user-chip") && !e.target.closest(".user-menu")) m.style.display = "none";
+  if (m && m.style.display === "block" && !e.target.closest(".user-chip") && !e.target.closest(".sidebar-user") && !e.target.closest(".user-menu")) m.style.display = "none";
 });
 
-/* ========================= APP SHELL ========================= */
+/* ========================= APP SHELL - SIDEBAR ========================= */
 let CURRENT_VIEW = "dashboard";
 const VIEW_STATE = {};
+const _NAV_GROUPS = [
+  { title: "Overview", items: ["dashboard"] },
+  { title: "CRM", items: ["customers","leads","orders","jobs","tasks"] },
+  { title: "Service", items: ["outsource","amc","pickup","delivery"] },
+  { title: "Store & Finance", items: ["inventory","billing","accounting"] },
+  { title: "Workspace", items: ["attendance","reports"] },
+  { title: "System", items: ["recycle_bin","employees","settings"] },
+];
+function _isMobileSidebar() { return window.innerWidth <= 1024; }
+function openSidebar() { const a = document.getElementById("app-view"); if (a) a.classList.add("sidebar-open"); }
+function closeSidebar() { const a = document.getElementById("app-view"); if (a) a.classList.remove("sidebar-open"); }
+function toggleSidebar() {
+  const a = document.getElementById("app-view");
+  if (!a) return;
+  if (_isMobileSidebar()) {
+    a.classList.contains("sidebar-open") ? closeSidebar() : openSidebar();
+  } else {
+    // desktop: if collapsed, expand; otherwise toggle drawer overlay behavior for convenience
+    if (a.classList.contains("sidebar-collapsed")) {
+      a.classList.remove("sidebar-collapsed");
+      localStorage.setItem("crm_sidebar_collapsed", "0");
+    } else {
+      // quick drawer preview on desktop
+      a.classList.contains("sidebar-open") ? closeSidebar() : openSidebar();
+    }
+  }
+}
+function toggleSidebarCollapse() {
+  const a = document.getElementById("app-view");
+  if (!a) return;
+  const collapsed = a.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("crm_sidebar_collapsed", collapsed ? "1" : "0");
+  closeSidebar();
+}
+function updateTopbar(view) {
+  const map = {};
+  NAV_ITEMS.forEach(it => map[it[0]] = { ico: it[1], label: it[2] });
+  const cur = map[view] || map.dashboard;
+  const t = document.getElementById("topbar-page-title");
+  const ic = document.getElementById("topbar-page-icon");
+  if (t) t.textContent = cur.label;
+  if (ic) ic.textContent = cur.ico;
+}
 function showApp() {
   document.getElementById("login-view").style.display = "none";
-  document.getElementById("app-view").style.display = "flex";
-  document.getElementById("user-name").textContent = SESSION.user.full_name || SESSION.user.username;
-  document.getElementById("user-role").textContent = (SESSION.user.role || "user").replace(/_/g, " ");
-  document.getElementById("user-avatar").textContent = initials(SESSION.user.full_name || SESSION.user.username);
+  const appEl = document.getElementById("app-view");
+  appEl.style.display = "flex";
+  const displayName = SESSION.user.full_name || SESSION.user.username;
+  const roleName = (SESSION.user.role || "user").replace(/_/g, " ");
+  const ini = initials(displayName);
+  // topbar + sidebar user sync
+  ["user-name", "sidebar-name"].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = displayName; });
+  ["user-role", "sidebar-role"].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = roleName; });
+  ["user-avatar", "sidebar-avatar"].forEach(id => { const e = document.getElementById(id); if (e) e.textContent = ini; });
   q1("SELECT value FROM settings WHERE key = 'company_name' LIMIT 1").then(r => {
-    if (r && r.value) document.getElementById("menu-company").textContent = r.value;
+    if (r && r.value) { const mc = document.getElementById("menu-company"); if (mc) mc.textContent = r.value; }
   }).catch(() => {});
+  // restore collapsed state (desktop)
+  try {
+    if (localStorage.getItem("crm_sidebar_collapsed") === "1" && !_isMobileSidebar()) {
+      appEl.classList.add("sidebar-collapsed");
+    }
+  } catch (e) {}
+  // auto-close drawer on window resize to avoid stuck overlay
+  window.addEventListener("resize", () => {
+    if (!_isMobileSidebar()) {
+      // keep overlay closed when moving to desktop
+      if (appEl.classList.contains("sidebar-open") && appEl.classList.contains("sidebar-collapsed")) {
+        // collapsed + open not needed
+      }
+    } else {
+      appEl.classList.remove("sidebar-collapsed");
+    }
+  });
+  // ESC to close drawer/menu
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      closeSidebar();
+      const m = document.getElementById("user-menu");
+      if (m) m.style.display = "none";
+      closeModal();
+    }
+  });
   renderNav();
+  updateTopbar("dashboard");
   navigate("dashboard");
   installMaybeShow();
 }
 function renderNav() {
   const nav = document.getElementById("nav");
-  const allowed = NAV_ITEMS.filter(it => hasPerm(it[3]));
-  nav.innerHTML = allowed.map(([id, ico, label]) =>
-    `<div class="chip ${CURRENT_VIEW === id ? "active" : ""}" data-view="${id}" onclick="navigate('${id}')"><span class="ico">${ico}</span><span>${esc(label)}</span></div>`
-  ).join("");
+  if (!nav) return;
+  const allowedIds = new Set(NAV_ITEMS.filter(it => hasPerm(it[3])).map(it => it[0]));
+  const lookup = {};
+  NAV_ITEMS.forEach(it => lookup[it[0]] = it);
+  let html = "";
+  _NAV_GROUPS.forEach(g => {
+    const gItems = g.items.filter(id => allowedIds.has(id));
+    if (!gItems.length) return;
+    html += `<div class="nav-section"><div class="nav-section-title">${esc(g.title)}</div>`;
+    gItems.forEach(id => {
+      const it = lookup[id];
+      if (!it) return;
+      const active = CURRENT_VIEW === id ? " active" : "";
+      html += `<div class="nav-item${active}" data-view="${id}" onclick="navigate('${id}')" title="${esc(it[2])}"><span class="nav-ico">${it[1]}</span><span class="nav-label">${esc(it[2])}</span><span class="nav-indicator"></span></div>`;
+    });
+    html += `</div>`;
+  });
+  // fallback if no groups matched (show all allowed flat)
+  if (!html) {
+    const allowed = NAV_ITEMS.filter(it => hasPerm(it[3]));
+    html = `<div class="nav-section"><div class="nav-section-title">Menu</div>` + allowed.map(([id, ico, label]) =>
+      `<div class="nav-item ${CURRENT_VIEW === id ? "active" : ""}" data-view="${id}" onclick="navigate('${id}')"><span class="nav-ico">${ico}</span><span class="nav-label">${esc(label)}</span><span class="nav-indicator"></span></div>`
+    ).join("") + `</div>`;
+  }
+  nav.innerHTML = html;
 }
 async function navigate(view) {
   CURRENT_VIEW = view;
   VIEW_STATE[view] = VIEW_STATE[view] || {};
   renderNav();
+  updateTopbar(view);
+  // auto close drawer on mobile after selection + hide user menu
+  if (_isMobileSidebar()) closeSidebar();
+  const um = document.getElementById("user-menu");
+  if (um) um.style.display = "none";
   const el = document.getElementById("content");
-  el.innerHTML = spinner();
+  if (el) el.innerHTML = spinner();
   const fn = VIEWS[view];
   if (fn) {
     try { await fn(); }
     catch (e) {
       console.error("View error [" + view + "]:", e);
-      el.innerHTML = '<div class="empty"><div class="big">!</div><div class="msg"><b>Error loading ' + esc(view) + '</b><br><span style="color:var(--danger);font-size:12px">' + esc(e.message || String(e)) + '</span><br><br><button class="btn primary" onclick="navigate(\'' + esc(view) + '\')">Retry</button></div></div>';
+      if (el) el.innerHTML = '<div class="empty"><div class="big">!</div><div class="msg"><b>Error loading ' + esc(view) + '</b><br><span style="color:var(--danger);font-size:12px">' + esc(e.message || String(e)) + '</span><br><br><button class="btn primary" onclick="navigate(\'' + esc(view) + '\')">Retry</button></div></div>';
     }
   }
+  // scroll content not window (fits browser)
+  const contentEl = document.getElementById("content");
+  if (contentEl) contentEl.scrollTop = 0;
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
-async function refreshAll() { navigate(CURRENT_VIEW); toast("Refreshed", "ok"); }
+async function refreshAll() {
+  const um = document.getElementById("user-menu");
+  if (um) um.style.display = "none";
+  navigate(CURRENT_VIEW);
+  toast("Refreshed", "ok");
+}
 const VIEWS = {};
 
 document.addEventListener("keydown", e => {
@@ -2236,10 +2346,10 @@ VIEWS.inventory = async function(){
     </div>
     <div style="overflow:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:var(--bg-secondary)"><th>ID</th><th>Code</th><th>Name</th><th>Category</th><th>Brand</th><th>Stock</th><th>Price</th><th>Min Stock</th><th>Actions</th></tr></thead>
-        <tbody>${rows.map(p=>{
+        <thead><tr style="background:var(--bg-secondary)"><th>S.No</th><th>Code</th><th>Name</th><th>Category</th><th>Brand</th><th>Stock</th><th>Price</th><th>Min Stock</th><th>Actions</th></tr></thead>
+        <tbody>${rows.map((p,idx)=>{
           const low = (p.current_stock||0) <= (p.min_stock||0) && (p.min_stock||0)>0;
-          return `<tr><td>${p.id}</td><td>${esc(p.code||'-')}</td><td><b>${esc(p.name)}</b>${low?' <span style="color:#ef4444">\u26A0 Low</span>':''}</td><td>${esc(p.category||'-')}</td><td>${esc(p.brand||'-')}</td><td>${p.current_stock||0}</td><td>${p.selling_price?fmtMoney(p.selling_price):'-'}</td><td>${p.min_stock||0}</td><td><div style="display:flex;gap:4px"><button class="btn sm" style="background:#8b5cf6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="productForm(${p.id})">Edit</button><button class="btn sm" style="background:#ef4444;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="deleteProduct(${p.id})">Del</button></div></td></tr>`;
+          return `<tr><td>${idx+1}</td><td>${esc(p.code||'-')}</td><td><b>${esc(p.name)}</b>${low?' <span style="color:#ef4444">\u26A0 Low</span>':''}</td><td>${esc(p.category||'-')}</td><td>${esc(p.brand||'-')}</td><td>${p.current_stock||0}</td><td>${p.selling_price?fmtMoney(p.selling_price):'-'}</td><td>${p.min_stock||0}</td><td><div style="display:flex;gap:4px"><button class="btn sm" style="background:#8b5cf6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="productForm(${p.id})">Edit</button><button class="btn sm" style="background:#ef4444;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="deleteProduct(${p.id})">Del</button></div></td></tr>`;
         }).join("")}</tbody>
       </table>
     </div>
@@ -2251,7 +2361,7 @@ function exportInventory(){
   const rows=window._invRows||[];
   if(!rows.length) return toast("No data","err");
   const headers=["Code","Name","Category","Brand","Stock","Min Stock","Cost Price","Selling Price","HSN"];
-  const data=rows.map(p=>({"Code":p.code||"", "Name":p.name, "Category":p.category||"", "Brand":p.brand||"", "Stock":p.current_stock||0, "Min Stock":p.min_stock||0, "Cost Price":p.purchase_price||0, "Selling Price":p.selling_price||0, "HSN":p.hsn_code||""}));
+  const data=rows.map((p,idx)=>({"Code":p.code||"", "Name":p.name, "Category":p.category||"", "Brand":p.brand||"", "Stock":p.current_stock||0, "Min Stock":p.min_stock||0, "Cost Price":p.purchase_price||0, "Selling Price":p.selling_price||0, "HSN":p.hsn_code||""}));
   exportToCSV(headers,data,"inventory");
 }
 async function productForm(id){
@@ -2473,7 +2583,7 @@ async function posItemSearch(term){
   if(!term.trim()){ sugg.style.display="none"; return; }
   const rows=await q("SELECT id, name, current_stock, selling_price FROM products WHERE is_active=1 AND name LIKE ? ORDER BY name LIMIT 10",["%"+term+"%"]);
   if(!rows.length){ sugg.style.display="none"; return; }
-  sugg.innerHTML=rows.map(p=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSItem(${p.id})">${esc(p.name)} | Stock: ${p.current_stock||0} | ${fmtMoney(p.selling_price||0)}</div>`).join("");
+  sugg.innerHTML=rows.map((p,idx)=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSItem(${p.id})">${esc(p.name)} | Stock: ${p.current_stock||0} | ${fmtMoney(p.selling_price||0)}</div>`).join("");
   sugg.style.display="block";
 }
 async function pickPOSItem(id){
@@ -2533,7 +2643,7 @@ async function quickPOSAddItem(){
 async function browsePOSProducts(){
   const rows=await q("SELECT id, name, selling_price, current_stock FROM products WHERE is_active=1 ORDER BY name LIMIT 50");
   let html='<input class="input" placeholder="Search..." oninput="filterPOSBrowse(this.value)" style="margin-bottom:8px"><div id="pos-browse-list" style="max-height:50vh;overflow:auto">';
-  html+=rows.map(p=>`<div class="pos-browse-item" data-name="${esc(p.name.toLowerCase())}" style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee;cursor:pointer" onclick="pickPOSItem(${p.id});closeModal()"><span>${esc(p.name)} (Stock:${p.current_stock||0})</span><span>${fmtMoney(p.selling_price||0)}</span></div>`).join("")+'</div>';
+  html+=rows.map((p,idx)=>`<div class="pos-browse-item" data-name="${esc(p.name.toLowerCase())}" style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee;cursor:pointer" onclick="pickPOSItem(${p.id});closeModal()"><span>${esc(p.name)} (Stock:${p.current_stock||0})</span><span>${fmtMoney(p.selling_price||0)}</span></div>`).join("")+'</div>';
   openModal(modalHead("Browse Products")+modalBody(html)+modalActions('<button class="btn primary" onclick="closeModal()">Close</button>'),"lg");
   window.filterPOSBrowse=(term)=>{
     const t=term.toLowerCase();
@@ -2687,9 +2797,32 @@ async function purchaseForm(id){
       id=newRow?newRow.id:id;
     }
     for(const it of window._poCart){
-      await exec("INSERT INTO purchase_order_items (po_id, product_id, product_name, quantity, unit_price, total_price) VALUES (?,?,?,?,?,?)",[id, it.product_id, it.name, it.qty, it.rate, it.total]);
+      let pid=it.product_id;
+      if(!pid){
+        let prod=await q1("SELECT id FROM products WHERE name LIKE ? LIMIT 1", [it.name]);
+        if(!prod) prod=await q1("SELECT id FROM products WHERE name LIKE ? LIMIT 1", ["%"+it.name+"%"]);
+        if(prod) pid=prod.id;
+        else {
+          const code="PRD-"+Date.now().toString().slice(-6);
+          const uv=uuid();
+          await exec("INSERT INTO products (uuid, code, name, category, purchase_price, selling_price, current_stock, min_stock, is_active, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,0,2,1,?,?, 'pending')",[uv,code,it.name,"other",it.rate,it.rate*1.2,0]);
+          const nr=await q1("SELECT id FROM products WHERE code=?",[code]);
+          pid=nr?nr.id:null;
+          it.product_id=pid;
+        }
+      }
+      await exec("INSERT INTO purchase_order_items (po_id, product_id, product_name, quantity, unit_price, total_price) VALUES (?,?,?,?,?,?)",[id, pid, it.name, it.qty, it.rate, it.total]);
+      if(pid){
+        const prod=await q1("SELECT current_stock FROM products WHERE id=?",[pid]);
+        const old=prod? (prod.current_stock||0):0;
+        const nowStock=old+it.qty;
+        await exec("UPDATE products SET current_stock=?, purchase_price=?, updated_at=? WHERE id=?",[nowStock,it.rate,nowStr(),pid]);
+        await exec("INSERT INTO stock_movements (product_id, movement_type, quantity, balance_before, balance_after, unit_price, total_price, reference_type, reference_id, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending')",[pid,"purchase",it.qty,old,nowStock,it.rate,it.total,"purchase_order",id,SESSION.user.id,nowStr()]);
+      }
     }
-    toast("Saved","ok"); closeModal(); VIEWS.billing();
+    // update supplier balance
+    try{ const sup=await q1("SELECT balance FROM suppliers WHERE id=?",[supId]); if(sup) await exec("UPDATE suppliers SET balance=COALESCE(balance,0)+? WHERE id=?",[subtotal,supId]); }catch(e){}
+    toast("Saved - Inventory updated","ok"); closeModal(); VIEWS.billing();
   };
 }
 async function renderGSTReports(){
@@ -3325,7 +3458,7 @@ VIEWS.pickup = async function(){
       <select class="select" onchange="VIEW_STATE.pickup.status=this.value;VIEWS.pickup()"><option>All</option><option>pending</option><option>picked</option><option>delivered</option><option>cancelled</option></select>
       <button class="btn" onclick="exportPickups()">Export to Excel</button>
     </div>
-    <div style="overflow:auto"><table class="tbl" style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)"><th>Job Number</th><th>Customer</th><th>Device Type</th><th>Address</th><th>Assignee</th><th>Status</th><th>Pick Up Time</th><th>Due Date</th><th>Action</th></tr></thead><tbody>${rows.map(p=>{
+    <div style="overflow:auto"><table class="tbl" style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)"><th>Job Number</th><th>Customer</th><th>Device Type</th><th>Address</th><th>Assignee</th><th>Status</th><th>Pick Up Time</th><th>Due Date</th><th>Action</th></tr></thead><tbody>${rows.map((p,idx)=>{
       const sched=p.scheduled_date?fmtDT(p.scheduled_date):"-";
       const due=p.due_date?fmtD(p.due_date):"-";
       const jobNum = p.job_id? "Job #"+p.job_id : (p.pickup_number||"-");
@@ -3338,7 +3471,7 @@ function exportPickups(){
   const rows=window._pickupRows||[];
   if(!rows.length) return toast("No data","err");
   const headers=["Job Number","Customer","Device Type","Address","Assignee","Status","Pick Up Time","Due Date"];
-  const data=rows.map(p=>({"Job Number":p.pickup_number||"", "Customer":p.cname||"", "Device Type":p.device_type||"", "Address":p.pickup_address||"", "Assignee":p.aname||"", "Status":p.status, "Pick Up Time":fmtDT(p.scheduled_date), "Due Date":fmtD(p.due_date)}));
+  const data=rows.map((p,idx)=>({"Job Number":p.pickup_number||"", "Customer":p.cname||"", "Device Type":p.device_type||"", "Address":p.pickup_address||"", "Assignee":p.aname||"", "Status":p.status, "Pick Up Time":fmtDT(p.scheduled_date), "Due Date":fmtD(p.due_date)}));
   exportToCSV(headers,data,"pickups");
 }
 async function quickDeliverPickup(id){
