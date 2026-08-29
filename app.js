@@ -233,9 +233,26 @@ const STATUS_COLORS = {
   negotiation: "b-amber", converted: "b-green", not_interested: "b-red", won: "b-green", lost: "b-red",
   active: "b-green", inactive: "b-gray", expired: "b-red",
   low: "b-green", medium: "b-amber", high: "b-red", urgent: "b-red",
-  present: "b-green", absent: "b-red", leave: "b-amber", half_day: "b-amber"
+  present: "b-green", absent: "b-red", leave: "b-amber", half_day: "b-amber",
+  INWARD: "b-blue", AT_FACTORY: "b-purple", BACK_IN_STORE: "b-green",
+  DELIVERED: "b-gray", standby_issue: "b-amber"
 };
 function badge(s) { if (!s) return ""; return '<span class="badge ' + (STATUS_COLORS[s] || "b-gray") + '">' + esc(String(s).replace(/_/g, " ")) + "</span>"; }
+function _splitCollectedBy(notes) {
+  if (!notes) return ["", ""];
+  const lines = String(notes).split("\n");
+  let collected = "";
+  let remaining = lines.slice();
+  for (let i = 0; i < lines.length; i++) {
+    const stripped = lines[i].trim();
+    if (stripped.toLowerCase().startsWith("collected by:")) {
+      collected = stripped.substring("collected by:".length).trim();
+      remaining.splice(i, 1);
+      break;
+    }
+  }
+  return [collected, remaining.join("\n").trim()];
+}
 
 /* ========================= AUTH / SESSION ========================= */
 let SESSION = null;
@@ -890,104 +907,685 @@ async function jobCommentForm(id) {
 }
 
 /* =====================================================
-   TASKS (uses master_repair_jobs - inward/outward workflow)
+   TASKS - 5 Tabs matching desktop TaskPanel
    ===================================================== */
 VIEWS.tasks = async function () {
-  const el = document.getElementById("content");
-  if (!VIEW_STATE.tasks.tab) VIEW_STATE.tasks.tab = "general";
-  if (!VIEW_STATE.tasks.filter) VIEW_STATE.tasks.filter = "all";
+  if (!VIEW_STATE.tasks.tab) VIEW_STATE.tasks.tab = "tasks";
   if (!VIEW_STATE.tasks.search) VIEW_STATE.tasks.search = "";
+  if (!VIEW_STATE.tasks.status) VIEW_STATE.tasks.status = "all";
+  if (!VIEW_STATE.tasks.type) VIEW_STATE.tasks.type = "all";
+  if (!VIEW_STATE.tasks.standby) VIEW_STATE.tasks.standby = "all";
+  if (!VIEW_STATE.tasks.ledgerType) VIEW_STATE.tasks.ledgerType = "all";
+  if (!VIEW_STATE.tasks.selected) VIEW_STATE.tasks.selected = [];
+  const el = document.getElementById("content");
+  const tab = VIEW_STATE.tasks.tab;
+  const tabs = [
+    ["tasks", "\uD83D\uDCCB", "Tasks"],
+    ["inward", "\u2B05\uFE0F", "Inward"],
+    ["outward", "\u27A1\uFE0F", "Outward"],
+    ["standby", "\uD83D\uDCBB", "Standby"],
+    ["ledger", "\uD83D\uDCDC", "Ledger"]
+  ];
+  let html = '<div class="tabs">';
+  for (const [k, ic, lb] of tabs) {
+    html += '<div class="tab ' + (tab === k ? "active" : "") + '" onclick="setTaskTab(\'' + k + '\')">' + ic + ' ' + lb + '</div>';
+  }
+  html += "</div>";
+  el.innerHTML = html + spinner();
+  if (tab === "tasks") await renderTasksTab();
+  else if (tab === "inward") await renderInwardTab();
+  else if (tab === "outward") await renderOutwardTab();
+  else if (tab === "standby") await renderStandbyTab();
+  else if (tab === "ledger") await renderLedgerTab();
+};
+function setTaskTab(t) {
+  VIEW_STATE.tasks.tab = t;
+  VIEW_STATE.tasks.search = "";
+  VIEW_STATE.tasks.status = "all";
+  VIEW_STATE.tasks.type = "all";
+  VIEW_STATE.tasks.selected = [];
+  navigate("tasks");
+}
+function toggleTaskSel(id) {
+  const s = VIEW_STATE.tasks.selected;
+  const i = s.indexOf(id);
+  if (i >= 0) s.splice(i, 1); else s.push(id);
+  navigate("tasks");
+}
+function clearTaskSel() {
+  VIEW_STATE.tasks.selected = [];
+  navigate("tasks");
+}
+async function renderTasksTab() {
   const where = [];
   const args = [];
-  const tab = VIEW_STATE.tasks.tab;
-  if (tab === "inward") where.push("j.source_tab = 'inward'");
-  else if (tab === "outward") where.push("j.source_tab = 'outward'");
-  if (VIEW_STATE.tasks.filter !== "all") { where.push("j.current_status = ?"); args.push(VIEW_STATE.tasks.filter); }
-  if (VIEW_STATE.tasks.search) { where.push("(j.entry_number LIKE ? OR c.name LIKE ? OR j.brand LIKE ?)"); const s = "%"+VIEW_STATE.tasks.search+"%"; args.push(s,s,s); }
-  const sql = `SELECT j.*, c.name cname FROM master_repair_jobs j LEFT JOIN customers c ON c.id = j.customer_id ${where.length?"WHERE "+where.join(" AND "):""} ORDER BY j.created_at DESC LIMIT 300`;
+  if (VIEW_STATE.tasks.status !== "all") { where.push("status = ?"); args.push(VIEW_STATE.tasks.status); }
+  if (VIEW_STATE.tasks.type !== "all") {
+    if (VIEW_STATE.tasks.type === "general") where.push("(task_type = 'general' OR task_type IS NULL)");
+    else where.push("task_type = ?");
+    if (VIEW_STATE.tasks.type !== "general") args.push(VIEW_STATE.tasks.type);
+  }
+  if (VIEW_STATE.tasks.search) {
+    where.push("(title LIKE ? OR description LIKE ?)");
+    const s = "%" + VIEW_STATE.tasks.search + "%";
+    args.push(s, s);
+  }
+  const sql = "SELECT * FROM tasks " + (where.length ? "WHERE " + where.join(" AND ") : "") + " ORDER BY created_at DESC LIMIT 300";
   const rows = await q(sql, args);
-  el.innerHTML = `
-    <div class="tabs">
-      <div class="tab ${tab==='general'?'active':''}" onclick="VIEW_STATE.tasks.tab='general';navigate('tasks')">General</div>
-      <div class="tab ${tab==='inward'?'active':''}" onclick="VIEW_STATE.tasks.tab='inward';navigate('tasks')">Inward</div>
-      <div class="tab ${tab==='outward'?'active':''}" onclick="VIEW_STATE.tasks.tab='outward';navigate('tasks')">Outward</div>
-    </div>
-    <div class="page-head">
-      <div><div class="page-title">${tab === 'general' ? 'All Tasks' : tab.charAt(0).toUpperCase() + tab.slice(1)}</div><div class="page-sub">${rows.length} entries</div></div>
-      <div class="page-actions">
-        <input class="search-box" placeholder="Search..." value="${esc(VIEW_STATE.tasks.search)}" oninput="VIEW_STATE.tasks.search=this.value;navigate('tasks')">
-        <button class="btn primary" onclick="taskInwardForm()">+ Inward</button>
-      </div>
-    </div>
-    <div class="filter-row">
-      ${["all","INWARD","AT_FACTORY","BACK_IN_STORE","DELIVERED"].map(f => `<div class="filter-pill ${VIEW_STATE.tasks.filter===f?"active":""}" onclick="VIEW_STATE.tasks.filter='${f}';navigate('tasks')">${f}</div>`).join("")}
-    </div>
-    <div class="list">
-      ${rows.length ? rows.map(r => `
-        <div class="list-item" onclick="openTask(${r.id})">
-          <div class="li-icon" style="background:var(--accent-container);color:var(--accent)">\uD83D\uDCE5</div>
-          <div class="li-main">
-            <div class="li-title">${esc(r.entry_number)} \u00B7 ${esc(r.brand || '')} ${esc(r.model || '')}</div>
-            <div class="li-sub">${esc(r.cname || '-')} \u00B7 ${esc(r.factory_name || '')}</div>
-          </div>
-          <div class="li-right">${badge(r.current_status)}<div class="li-when">${fmtDT(r.created_at)}</div></div>
-        </div>`).join("") : '<div class="empty"><div class="big">\uD83D\uDCCB</div><div class="msg">No tasks</div></div>'}
-    </div>
-  `;
-};
+  const el = document.getElementById("content");
+  const statusOpts = ["all", "pending", "in_progress", "completed", "cancelled"];
+  const typeOpts = ["all", "general", "pickup"];
+  el.innerHTML = el.innerHTML.replace(spinner(), "") +
+    '<div class="page-head">' +
+      '<div><div class="page-title">Tasks</div><div class="page-sub">' + rows.length + ' tasks</div></div>' +
+      '<div class="page-actions">' +
+        '<input class="search-box" placeholder="Search tasks, pickups..." value="' + esc(VIEW_STATE.tasks.search) + '" oninput="VIEW_STATE.tasks.search=this.value;renderTasksTab()">' +
+        '<button class="btn primary" onclick="taskForm(null)">+ New Task</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<select class="select" style="max-width:140px" onchange="VIEW_STATE.tasks.type=this.value;navigate(\'tasks\')">' +
+        typeOpts.map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.type === t ? " selected" : "") + ">" + t.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()) + "</option>").join("") +
+      "</select>" +
+      '<select class="select" style="max-width:160px" onchange="VIEW_STATE.tasks.status=this.value;navigate(\'tasks\')">' +
+        statusOpts.map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.status === t ? " selected" : "") + ">" + (t === "all" ? "All Status" : t.replace(/_/g, " ")) + "</option>").join("") +
+      "</select>" +
+    "</div>" +
+    '<div class="list">' +
+      (rows.length ? rows.map(r => {
+        const tt = r.task_type === "pickup" ? "Pickup" : "General";
+        return '<div class="list-item" onclick="openTaskDetail(' + r.id + ')">' +
+          '<div class="li-icon" style="background:var(--accent-container);color:var(--accent)">' + (r.task_type === "pickup" ? "\uD83D\uDE9E" : "\uD83D\uDCCB") + "</div>" +
+          '<div class="li-main">' +
+            '<div class="li-title">' + esc(r.title || "-") + ' \u00B7 ' + tt + "</div>" +
+            '<div class="li-sub">' + esc(r.description || "-") + "</div>" +
+          "</div>" +
+          '<div class="li-right">' + badge(r.status) + '<div class="li-when">' + fmtDT(r.due_date || r.created_at) + "</div></div>" +
+        "</div>";
+      }).join("") : '<div class="empty"><div class="big">\uD83D\uDCCB</div><div class="msg">No tasks</div></div>') +
+    "</div>";
+}
+async function renderInwardTab() {
+  const where = ["(j.current_status IN ('INWARD','BACK_IN_STORE'))", "(j.source_tab IS NULL OR j.source_tab != 'outward')"];
+  const args = [];
+  if (VIEW_STATE.tasks.status !== "all") { where.push("j.current_status = ?"); args.push(VIEW_STATE.tasks.status); }
+  if (VIEW_STATE.tasks.search) {
+    where.push("(j.entry_number LIKE ? OR j.brand LIKE ? OR j.serial_number LIKE ? OR j.customer_name LIKE ?)");
+    const s = "%" + VIEW_STATE.tasks.search + "%";
+    args.push(s, s, s, s);
+  }
+  const sql = "SELECT j.*, s.model_name AS standby_model, s.asset_code AS standby_code FROM master_repair_jobs j LEFT JOIN standby_inventory_pool s ON s.id = j.linked_standby_id " +
+    "WHERE " + where.join(" AND ") + " ORDER BY j.updated_at DESC LIMIT 300";
+  const rows = await q(sql, args);
+  const el = document.getElementById("content");
+  const sel = VIEW_STATE.tasks.selected;
+  const selCount = sel.filter(id => rows.some(r => r.id === id)).length;
+  el.innerHTML = el.innerHTML.replace(spinner(), "") +
+    '<div class="page-head">' +
+      '<div><div class="page-title">Inward</div><div class="page-sub">' + rows.length + ' entries</div></div>' +
+      '<div class="page-actions">' +
+        '<input class="search-box" placeholder="Search entry #, customer, device, serial..." value="' + esc(VIEW_STATE.tasks.search) + '" oninput="VIEW_STATE.tasks.search=this.value;renderInwardTab()">' +
+        '<button class="btn primary" onclick="taskInwardForm()">+ New Entry</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<select class="select" style="max-width:160px" onchange="VIEW_STATE.tasks.status=this.value;navigate(\'tasks\')">' +
+        ["all", "INWARD", "BACK_IN_STORE"].map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.status === t ? " selected" : "") + ">" + (t === "all" ? "All" : t.replace(/_/g, " ")) + "</option>").join("") +
+      "</select>" +
+      (selCount > 0 ? '<span style="color:#666;font-size:12px">' + selCount + " selected</span> " + (selCount >= 1 ? '<button class="btn" style="background:#ec4899;color:white;border:none;padding:6px 14px;border-radius:6px;font-weight:600;font-size:11px" onclick="batchSendToFactory()">Send to Service Center</button>' : "") + '<button class="btn" style="padding:6px 14px;font-size:11px" onclick="clearTaskSel()">Clear</button>' : "") +
+    "</div>" +
+    '<div class="list">' +
+      (rows.length ? rows.map(r => {
+        const checked = sel.includes(r.id) ? "checked" : "";
+        const device = (r.device_type || "").replace(/_/g, " ");
+        const bm = ((r.brand || "") + " " + (r.model || "")).trim() || "-";
+        const hasStby = !!r.linked_standby_id;
+        const stbyLabel = hasStby ? "Yes" : "No";
+        let actions = "";
+        if (r.current_status === "INWARD" && !hasStby) {
+          actions += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();allocateStandby(' + r.id + ')">Allocate Standby</button> ';
+        } else if (r.current_status === "INWARD" && hasStby) {
+          actions += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();returnStandbyOnly(' + r.id + ')">Return Standby</button> ';
+        } else if (r.current_status === "BACK_IN_STORE" && hasStby) {
+          actions += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();returnStandbyOnly(' + r.id + ')">Return Standby</button> ';
+        }
+        if (r.current_status === "BACK_IN_STORE") {
+          actions += '<button class="btn small" style="background:#22c55e;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();deliverJobDialog(' + r.id + ',' + hasStby + ')">Deliver</button> ';
+        }
+        if (r.current_status === "INWARD") {
+          actions += '<button class="btn small" style="background:#ec4899;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();sendToFactoryDialog([' + r.id + '])">Send</button> ';
+        }
+        return '<div class="list-item" onclick="openTask(' + r.id + ')" style="flex-wrap:wrap;gap:8px">' +
+          '<label class="li-check" onclick="event.stopPropagation()"><input type="checkbox" ' + checked + ' onchange="toggleTaskSel(' + r.id + ')"></label>' +
+          '<div class="li-icon" style="background:var(--info-container);color:var(--info)">\u2B05\uFE0F</div>' +
+          '<div class="li-main">' +
+            '<div class="li-title">' + esc(r.entry_number) + ' \u00B7 ' + esc(bm) + ' \u00B7 <span style="font-size:11px;color:#666">' + esc(device) + '</span></div>' +
+            '<div class="li-sub">' + esc(r.customer_name || "-") + ' \u00B7 Serial: ' + esc(r.serial_number || "-") + ' \u00B7 Standby: ' + stbyLabel + (hasStby ? " (" + esc(r.standby_code || "") + ")" : "") + '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' + badge(r.current_status) + '<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' + actions + '</div><div class="li-when">' + fmtDT(r.updated_at) + '</div></div>' +
+        '</div>';
+      }).join("") : '<div class="empty"><div class="big">\u2B05\uFE0F</div><div class="msg">No inward entries</div></div>') +
+    "</div>";
+}
+async function renderOutwardTab() {
+  const where = ["(j.current_status = 'AT_FACTORY' OR (j.current_status = 'BACK_IN_STORE' AND j.source_tab = 'outward'))"];
+  const args = [];
+  if (VIEW_STATE.tasks.status !== "all") { where.push("j.current_status = ?"); args.push(VIEW_STATE.tasks.status); }
+  if (VIEW_STATE.tasks.search) {
+    where.push("(j.entry_number LIKE ? OR j.brand LIKE ? OR j.serial_number LIKE ? OR j.customer_name LIKE ?)");
+    const s = "%" + VIEW_STATE.tasks.search + "%";
+    args.push(s, s, s, s);
+  }
+  const sql = "SELECT j.* FROM master_repair_jobs j WHERE " + where.join(" AND ") + " ORDER BY j.updated_at DESC LIMIT 300";
+  const rows = await q(sql, args);
+  const el = document.getElementById("content");
+  const sel = VIEW_STATE.tasks.selected;
+  const selCount = sel.filter(id => rows.some(r => r.id === id)).length;
+  el.innerHTML = el.innerHTML.replace(spinner(), "") +
+    '<div class="page-head">' +
+      '<div><div class="page-title">Outward</div><div class="page-sub">' + rows.length + ' entries</div></div>' +
+      '<div class="page-actions">' +
+        '<input class="search-box" placeholder="Search entry #, customer, device, serial..." value="' + esc(VIEW_STATE.tasks.search) + '" oninput="VIEW_STATE.tasks.search=this.value;renderOutwardTab()">' +
+        '<button class="btn primary" onclick="newOutwardForm()">+ New Outward</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<select class="select" style="max-width:160px" onchange="VIEW_STATE.tasks.status=this.value;navigate(\'tasks\')">' +
+        ["all", "AT_FACTORY", "BACK_IN_STORE"].map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.status === t ? " selected" : "") + ">" + (t === "all" ? "All" : t.replace(/_/g, " ")) + "</option>").join("") +
+      "</select>" +
+      (selCount > 0 ? '<span style="color:#666;font-size:12px">' + selCount + " selected</span> " + (selCount >= 1 ? '<button class="btn" style="background:#8b5cf6;color:white;border:none;padding:6px 14px;border-radius:6px;font-weight:600;font-size:11px" onclick="batchReceiveFromFactory()">Receive Back</button>' : "") + '<button class="btn" style="padding:6px 14px;font-size:11px" onclick="clearTaskSel()">Clear</button>' : "") +
+    "</div>" +
+    '<div class="list">' +
+      (rows.length ? rows.map(r => {
+        const checked = sel.includes(r.id) ? "checked" : "";
+        const bm = ((r.brand || "") + " " + (r.model || "")).trim() || "-";
+        const hasStby = !!r.linked_standby_id;
+        let actions = "";
+        if (r.current_status === "BACK_IN_STORE") {
+          actions += '<span style="color:#22c55e;font-size:10px;font-weight:600">Received \u2713</span> ';
+          actions += '<button class="btn small" style="background:#22c55e;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();deliverJobDialog(' + r.id + ',' + hasStby + ')">Deliver</button> ';
+        } else {
+          actions += '<button class="btn small" style="background:#8b5cf6;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();receiveFromFactoryDialog([' + r.id + '])">Receive Back</button> ';
+        }
+        return '<div class="list-item" onclick="openTask(' + r.id + ')" style="flex-wrap:wrap;gap:8px">' +
+          '<label class="li-check" onclick="event.stopPropagation()"><input type="checkbox" ' + checked + ' onchange="toggleTaskSel(' + r.id + ')"></label>' +
+          '<div class="li-icon" style="background:var(--accent-container);color:var(--accent)">\u27A1\uFE0F</div>' +
+          '<div class="li-main">' +
+            '<div class="li-title">' + esc(r.entry_number) + ' \u00B7 ' + esc(bm) + '</div>' +
+            '<div class="li-sub">' + esc(r.customer_name || "-") + ' \u00B7 Factory: ' + esc(r.factory_name || "-") + ' \u00B7 Serial: ' + esc(r.serial_number || "-") + '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' + badge(r.current_status) + '<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">' + actions + '</div><div class="li-when">' + fmtDT(r.outward_date || r.updated_at) + '</div></div>' +
+        '</div>';
+      }).join("") : '<div class="empty"><div class="big">\u27A1\uFE0F</div><div class="msg">No outward entries</div></div>') +
+    "</div>";
+}
+async function renderStandbyTab() {
+  const where = [];
+  const args = [];
+  if (VIEW_STATE.tasks.standby !== "all") { where.push("status = ?"); args.push(VIEW_STATE.tasks.standby); }
+  if (VIEW_STATE.tasks.search) {
+    where.push("(asset_code LIKE ? OR model_name LIKE ? OR serial_number LIKE ?)");
+    const s = "%" + VIEW_STATE.tasks.search + "%";
+    args.push(s, s, s);
+  }
+  const sql = "SELECT * FROM standby_inventory_pool " + (where.length ? "WHERE " + where.join(" AND ") : "") + " ORDER BY created_at DESC LIMIT 300";
+  const rows = await q(sql, args);
+  const el = document.getElementById("content");
+  el.innerHTML = el.innerHTML.replace(spinner(), "") +
+    '<div class="page-head">' +
+      '<div><div class="page-title">Standby / Loaner Pool</div><div class="page-sub">' + rows.length + ' devices</div></div>' +
+      '<div class="page-actions">' +
+        '<input class="search-box" placeholder="Search by brand, model, serial..." value="' + esc(VIEW_STATE.tasks.search) + '" oninput="VIEW_STATE.tasks.search=this.value;renderStandbyTab()">' +
+        '<button class="btn primary" onclick="standbyForm(null)">+ Add Device</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<select class="select" style="max-width:160px" onchange="VIEW_STATE.tasks.standby=this.value;navigate(\'tasks\')">' +
+        ["all", "AVAILABLE", "LOANED"].map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.standby === t ? " selected" : "") + ">" + (t === "all" ? "All" : t) + "</option>").join("") +
+      "</select>" +
+    "</div>" +
+    '<div class="list">' +
+      (rows.length ? rows.map(s => {
+        let allocTo = "";
+        let actionBtn = "";
+        if (s.status === "AVAILABLE") {
+          actionBtn = '<button class="btn small" style="background:var(--accent);color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();standbyForm(' + s.id + ')">Edit</button>';
+        } else if (s.status === "LOANED") {
+          actionBtn = '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:4px 10px;border-radius:4px;font-size:10px" onclick="event.stopPropagation();returnStandbyFromPool(' + s.id + ')">Return</button>';
+        }
+        return '<div class="list-item" style="flex-wrap:wrap;gap:8px">' +
+          '<div class="li-icon" style="background:var(--info-container);color:var(--info)">\uD83D\uDCBB</div>' +
+          '<div class="li-main">' +
+            '<div class="li-title">' + esc(s.asset_code || "-") + ' \u00B7 ' + esc(s.model_name || "-") + '</div>' +
+            '<div class="li-sub">Serial: ' + esc(s.serial_number || "-") + ' \u00B7 Condition: ' + esc(s.condition || "-") + ' \u00B7 Cost: ' + fmtMoney(s.purchase_cost || 0) + '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' + badge(s.status) + '<div style="display:flex;gap:4px">' + actionBtn + '</div></div>' +
+        '</div>';
+      }).join("") : '<div class="empty"><div class="big">\uD83D\uDCBB</div><div class="msg">No standby devices</div></div>') +
+    "</div>";
+}
+async function renderLedgerTab() {
+  const where = [];
+  const args = [];
+  if (VIEW_STATE.tasks.ledgerType !== "all") { where.push("m.movement_type = ?"); args.push(VIEW_STATE.tasks.ledgerType); }
+  if (VIEW_STATE.tasks.search) {
+    where.push("(m.party_name LIKE ? OR m.technician_notes LIKE ? OR m.courier_tracking_no LIKE ?)");
+    const s = "%" + VIEW_STATE.tasks.search + "%";
+    args.push(s, s, s);
+  }
+  const sql = "SELECT m.*, j.entry_number, j.customer_name AS jcustomer, j.device_type, j.serial_number FROM material_movement_ledger m LEFT JOIN master_repair_jobs j ON j.id = m.job_id " +
+    (where.length ? "WHERE " + where.join(" AND ") : "") + " ORDER BY m.created_at DESC LIMIT 500";
+  const rows = await q(sql, args);
+  const el = document.getElementById("content");
+  const typeOpts = ["all", "INWARD_FROM_CLIENT", "OUTWARD_TO_FACTORY", "INWARD_FROM_FACTORY", "STANDBY_ISSUED", "STANDBY_RECLAIMED", "OUTWARD_TO_CLIENT"];
+  el.innerHTML = el.innerHTML.replace(spinner(), "") +
+    '<div class="page-head">' +
+      '<div><div class="page-title">Material Movement Ledger</div><div class="page-sub">' + rows.length + ' entries</div></div>' +
+      '<div class="page-actions">' +
+        '<input class="search-box" placeholder="Search by party, notes, courier..." value="' + esc(VIEW_STATE.tasks.search) + '" oninput="VIEW_STATE.tasks.search=this.value;renderLedgerTab()">' +
+      '</div>' +
+    '</div>' +
+    '<div class="filter-row">' +
+      '<select class="select" style="max-width:200px" onchange="VIEW_STATE.tasks.ledgerType=this.value;navigate(\'tasks\')">' +
+        typeOpts.map(t => '<option value="' + t + '"' + (VIEW_STATE.tasks.ledgerType === t ? " selected" : "") + ">" + (t === "all" ? "All Events" : t.replace(/_/g, " ")) + "</option>").join("") +
+      "</select>" +
+    "</div>" +
+    '<div class="ledger-table">' +
+      '<div class="ledger-head"><div>Date</div><div>Event</div><div>Entry #</div><div>Customer</div><div>Device</div><div>Serial</div><div>Party</div><div>Collected By</div><div>Notes</div></div>' +
+      (rows.length ? rows.map(m => {
+        const cb = _splitCollectedBy(m.technician_notes || "");
+        return '<div class="ledger-row">' +
+          '<div>' + fmtDT(m.movement_date) + '</div>' +
+          '<div>' + badge(m.movement_type) + '</div>' +
+          '<div>' + esc(m.entry_number || "-") + '</div>' +
+          '<div>' + esc(m.jcustomer || "-") + '</div>' +
+          '<div>' + esc((m.device_type || "").replace(/_/g, " ")) + '</div>' +
+          '<div>' + esc(m.serial_number || "-") + '</div>' +
+          '<div>' + esc(m.party_name || "-") + '</div>' +
+          '<div>' + esc(cb[0] || "-") + '</div>' +
+          '<div>' + esc(cb[1] || "-") + '</div>' +
+        '</div>';
+      }).join("") : '<div class="empty"><div class="big">\uD83D\uDCDC</div><div class="msg">No ledger entries</div></div>') +
+    "</div>";
+}
 async function openTask(id) {
   const t = await q1("SELECT j.*, c.name cname FROM master_repair_jobs j LEFT JOIN customers c ON c.id = j.customer_id WHERE j.id = ?", [id]);
   if (!t) return;
   const ledger = await q("SELECT * FROM material_movement_ledger WHERE job_id = ? ORDER BY movement_date DESC", [id]);
-  openModal(modalHead(`\uD83D\uDCE5 ${esc(t.entry_number)} ${badge(t.current_status)}`) + modalBody(`
-    <div class="grid-2" style="margin-bottom:14px">
-      <div class="kv"><span class="k">Customer</span><span class="v">${esc(t.cname || '-')}</span></div>
-      <div class="kv"><span class="k">Device</span><span class="v">${esc(t.brand || '')} ${esc(t.model || '')}</span></div>
-      <div class="kv"><span class="k">Factory</span><span class="v">${esc(t.factory_name || '-')}</span></div>
-      <div class="kv"><span class="k">Courier</span><span class="v">${esc(t.courier_tracking_no || '-')}</span></div>
-      <div class="kv"><span class="k">Repair Cost</span><span class="v">${fmtMoney(t.repair_cost || 0)}</span></div>
-      <div class="kv"><span class="k">Charge</span><span class="v">${fmtMoney(t.customer_charge || 0)}</span></div>
-    </div>
-    <h3 style="font-size:13px;margin:10px 0 6px">Material Movement</h3>
-    <div class="timeline">
-      ${ledger.length ? ledger.map(l => `<div class="tl-item">
-        <div class="tl-when">${fmtDT(l.movement_date)}</div>
-        <div class="tl-title">${esc(l.movement_type)} \u00B7 ${esc(l.party_name || '-')}</div>
-        ${l.technician_notes ? `<div class="tl-note">${esc(l.technician_notes)}</div>` : ''}
-      </div>`).join("") : '<div class="empty">No movements</div>'}
-    </div>
-  `) + modalActions(`<button class="btn primary" onclick="closeModal()">Close</button>`), "lg");
+  const standby = t.linked_standby_id ? await q1("SELECT * FROM standby_inventory_pool WHERE id = ?", [t.linked_standby_id]) : null;
+  let actBtns = "";
+  if (t.current_status === "INWARD" && !t.linked_standby_id) {
+    actBtns += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();allocateStandby(' + t.id + ')">Allocate Standby</button> ';
+  } else if (t.current_status === "INWARD" && t.linked_standby_id) {
+    actBtns += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();returnStandbyOnly(' + t.id + ')">Return Standby</button> ';
+  } else if (t.current_status === "BACK_IN_STORE" && t.linked_standby_id) {
+    actBtns += '<button class="btn small" style="background:#f59e0b;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();returnStandbyOnly(' + t.id + ')">Return Standby</button> ';
+  }
+  if (t.current_status === "INWARD") {
+    actBtns += '<button class="btn small" style="background:#ec4899;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();sendToFactoryDialog([' + t.id + '])">Send to Service Center</button> ';
+  }
+  if (t.current_status === "AT_FACTORY") {
+    actBtns += '<button class="btn small" style="background:#8b5cf6;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();receiveFromFactoryDialog([' + t.id + '])">Receive Back</button> ';
+  }
+  if (t.current_status === "BACK_IN_STORE") {
+    actBtns += '<button class="btn small" style="background:#22c55e;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();deliverJobDialog(' + t.id + ',' + (t.linked_standby_id ? "true" : "false") + ')">Deliver</button> ';
+  }
+  openModal(modalHead('\uD83D\uDCE5 ' + esc(t.entry_number) + ' ' + badge(t.current_status)) + modalBody(
+    (actBtns ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' + actBtns + '</div>' : "") +
+    '<div class="grid-2" style="margin-bottom:14px">' +
+      '<div class="kv"><span class="k">Customer</span><span class="v">' + esc(t.cname || "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Device</span><span class="v">' + esc((t.brand || "") + " " + (t.model || "")) + '</span></div>' +
+      '<div class="kv"><span class="k">Type</span><span class="v">' + esc((t.device_type || "-").replace(/_/g, " ")) + '</span></div>' +
+      '<div class="kv"><span class="k">Serial</span><span class="v">' + esc(t.serial_number || "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Factory</span><span class="v">' + esc(t.factory_name || "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Courier</span><span class="v">' + esc(t.courier_tracking_no || "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Standby</span><span class="v">' + (standby ? esc(standby.asset_code + " - " + standby.model_name) : "No") + '</span></div>' +
+      '<div class="kv"><span class="k">Repair Cost</span><span class="v">' + fmtMoney(t.repair_cost || 0) + '</span></div>' +
+      '<div class="kv"><span class="k">Customer Charge</span><span class="v">' + fmtMoney(t.customer_charge || 0) + '</span></div>' +
+      '<div class="kv"><span class="k">Inward Date</span><span class="v">' + fmtDT(t.inward_date) + '</span></div>' +
+      '<div class="kv"><span class="k">Outward Date</span><span class="v">' + fmtDT(t.outward_date) + '</span></div>' +
+      '<div class="kv"><span class="k">Received Date</span><span class="v">' + fmtDT(t.received_date) + '</span></div>' +
+      '<div class="kv"><span class="k">Delivered Date</span><span class="v">' + fmtDT(t.delivered_date) + '</span></div>' +
+    '</div>' +
+    (t.complaint ? '<div style="margin-bottom:10px"><b>Complaint:</b> ' + esc(t.complaint) + '</div>' : "") +
+    (t.inward_notes ? '<div style="margin-bottom:10px"><b>Inward Notes:</b> ' + esc(t.inward_notes) + '</div>' : "") +
+    (t.outward_notes ? '<div style="margin-bottom:10px"><b>Outward Notes:</b> ' + esc(t.outward_notes) + '</div>' : "") +
+    '<h3 style="font-size:13px;margin:10px 0 6px">Material Movement</h3>' +
+    '<div class="timeline">' +
+      (ledger.length ? ledger.map(l => {
+        const cb = _splitCollectedBy(l.technician_notes || "");
+        return '<div class="tl-item">' +
+          '<div class="tl-when">' + fmtDT(l.movement_date) + '</div>' +
+          '<div class="tl-title">' + badge(l.movement_type) + ' \u00B7 ' + esc(l.party_name || "-") + '</div>' +
+          (l.courier_tracking_no ? '<div class="tl-note">Courier: ' + esc(l.courier_tracking_no) + '</div>' : '') +
+          (l.cost_or_charge ? '<div class="tl-note">Cost: ' + fmtMoney(l.cost_or_charge) + '</div>' : '') +
+          (cb[0] ? '<div class="tl-note"><b>Collected by:</b> ' + esc(cb[0]) + '</div>' : '') +
+          (cb[1] ? '<div class="tl-note">' + esc(cb[1]) + '</div>' : '') +
+        '</div>';
+      }).join("") : '<div class="empty">No movements</div>') +
+    '</div>'
+  ) + modalActions('<button class="btn primary" onclick="closeModal()">Close</button>'), "lg");
+}
+async function openTaskDetail(id) {
+  const t = await q1("SELECT * FROM tasks WHERE id = ?", [id]);
+  if (!t) return;
+  const activities = await q("SELECT * FROM task_activities WHERE task_id = ? ORDER BY created_at DESC", [id]);
+  const comments = activities.filter(a => a.activity_type === "comment");
+  const cust = t.customer_id ? await q1("SELECT name FROM customers WHERE id = ?", [t.customer_id]) : null;
+  const assignee = t.assignee_id ? await q1("SELECT full_name FROM users WHERE id = ?", [t.assignee_id]) : null;
+  let actBtns = "";
+  if (t.status !== "completed" && t.status !== "cancelled") {
+    actBtns += '<button class="btn small" style="background:#22c55e;color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();taskSetStatus(' + t.id + ',\'completed\')">Mark Complete</button> ';
+    actBtns += '<button class="btn small" style="background:var(--accent);color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();taskForm(' + t.id + ')">Edit</button> ';
+    if (t.status === "pending") {
+      actBtns += '<button class="btn small" style="background:var(--info);color:white;border:none;padding:6px 14px;border-radius:6px;font-size:11px" onclick="closeModal();taskSetStatus(' + t.id + ',\'in_progress\')">Start</button> ';
+    }
+  }
+  openModal(modalHead('\uD83D\uDCCB ' + esc(t.title) + ' ' + badge(t.status)) + modalBody(
+    (actBtns ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' + actBtns + '</div>' : "") +
+    '<div class="grid-2" style="margin-bottom:14px">' +
+      '<div class="kv"><span class="k">Type</span><span class="v">' + esc((t.task_type || "general").replace(/_/g, " ")) + '</span></div>' +
+      '<div class="kv"><span class="k">Priority</span><span class="v">' + badge(t.priority || "medium") + '</span></div>' +
+      '<div class="kv"><span class="k">Customer</span><span class="v">' + esc(cust ? cust.name : "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Assignee</span><span class="v">' + esc(assignee ? assignee.full_name : "-") + '</span></div>' +
+      '<div class="kv"><span class="k">Due Date</span><span class="v">' + fmtDT(t.due_date) + '</span></div>' +
+      '<div class="kv"><span class="k">Status</span><span class="v">' + badge(t.status) + '</span></div>' +
+    '</div>' +
+    (t.description ? '<div style="margin-bottom:10px"><b>Description:</b> ' + esc(t.description) + '</div>' : "") +
+    (t.pickup_address ? '<div style="margin-bottom:10px"><b>Pickup Address:</b> ' + esc(t.pickup_address) + '</div>' : "") +
+    (t.contact_phone ? '<div style="margin-bottom:10px"><b>Contact:</b> ' + esc(t.contact_phone) + '</div>' : "") +
+    (t.device_type ? '<div style="margin-bottom:10px"><b>Device:</b> ' + esc(t.device_type) + '</div>' : "") +
+    (t.delivery_address ? '<div style="margin-bottom:10px"><b>Delivery Address:</b> ' + esc(t.delivery_address) + '</div>' : "") +
+    (t.is_onsite_repair == 1 || t.is_onsite_repair === "1" ? '<div style="margin-bottom:10px"><b>Onsite Amount:</b> ' + fmtMoney(t.onsite_amount_collected || 0) + (t.onsite_issues_resolved ? " \u00B7 Resolved: " + esc(t.onsite_issues_resolved) : "") + '</div>' : "") +
+    '<h3 style="font-size:13px;margin:10px 0 6px">Activity</h3>' +
+    '<div class="timeline">' +
+      (activities.length ? activities.map(a => '<div class="tl-item">' +
+        '<div class="tl-when">' + fmtDT(a.created_at) + ' \u00B7 ' + esc(a.created_by_name || "System") + '</div>' +
+        '<div class="tl-title">' + esc(a.activity_type) + (a.old_status && a.new_status ? " (" + a.old_status + " \u2192 " + a.new_status + ")" : "") + '</div>' +
+        (a.note ? '<div class="tl-note">' + esc(a.note) + '</div>' : '') +
+      '</div>').join("") : '<div class="empty">No activity yet</div>') +
+    '</div>' +
+    (t.status !== "completed" && t.status !== "cancelled" ? '<div style="margin-top:12px"><b>Add Comment:</b><textarea class="textarea" id="tk-comment" placeholder="Add a comment..." style="margin-top:4px"></textarea><button class="btn primary" style="margin-top:6px" onclick="addTaskComment(' + t.id + ')">Post</button></div>' : "")
+  ) + modalActions('<button class="btn" onclick="closeModal()">Close</button>'), "lg");
+}
+async function taskSetStatus(id, status) {
+  await exec("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?", [status, nowStr(), id]);
+  const uid = SESSION.user ? SESSION.user.id : null;
+  const uname = SESSION.user ? (SESSION.user.full_name || SESSION.user.username) : null;
+  await exec("INSERT INTO task_activities (task_id, activity_type, new_status, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?)", [id, "status_change", status, uid, uname, nowStr()]);
+  toast("Task " + status, "ok");
+  navigate("tasks");
+}
+async function addTaskComment(id) {
+  const note = gv("tk-comment");
+  if (!note) return toast("Enter a comment", "err");
+  const uid = SESSION.user ? SESSION.user.id : null;
+  const uname = SESSION.user ? (SESSION.user.full_name || SESSION.user.username) : null;
+  await exec("INSERT INTO task_activities (task_id, activity_type, note, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?)", [id, "comment", note, uid, uname, nowStr()]);
+  toast("Comment added", "ok");
+  openTaskDetail(id);
+}
+async function taskForm(id) {
+  const isEdit = id != null;
+  const t = isEdit ? await q1("SELECT * FROM tasks WHERE id = ?", [id]) : null;
+  const customers = await q("SELECT id, name, phone_primary FROM customers ORDER BY name");
+  const users = await q("SELECT id, full_name, username FROM users WHERE is_active = 1 OR is_active IS NULL ORDER BY full_name");
+  openModal(modalHead((isEdit ? "Edit" : "New") + " Task") + modalBody(
+    '<div class="field"><label>Title *</label><input class="input" id="tk-title" value="' + esc(t ? t.title : "") + '"></div>' +
+    '<div class="field"><label>Description</label><textarea class="textarea" id="tk-desc" rows="2">' + esc(t ? t.description : "") + '</textarea></div>' +
+    '<div class="row">' +
+      '<div class="field"><label>Type</label><select class="select" id="tk-type"><option value="general"' + (t && t.task_type === "general" ? " selected" : "") + '>General</option><option value="pickup"' + (t && t.task_type === "pickup" ? " selected" : "") + '>Pickup</option></select></div>' +
+      '<div class="field"><label>Priority</label><select class="select" id="tk-priority"><option value="low"' + (t && t.priority === "low" ? " selected" : "") + '>Low</option><option value="medium"' + (!t || t.priority === "medium" ? " selected" : "") + '>Medium</option><option value="high"' + (t && t.priority === "high" ? " selected" : "") + '>High</option><option value="urgent"' + (t && t.priority === "urgent" ? " selected" : "") + '>Urgent</option></select></div>' +
+    '</div>' +
+    '<div class="row">' +
+      '<div class="field"><label>Customer</label><select class="select" id="tk-cust"><option value="">-</option>' + customers.map(c => '<option value="' + c.id + '"' + (t && t.customer_id == c.id ? " selected" : "") + ">" + esc(c.name) + "</option>").join("") + '</select></div>' +
+      '<div class="field"><label>Assignee</label><select class="select" id="tk-assignee"><option value="">-</option>' + users.map(u => '<option value="' + u.id + '"' + (t && t.assignee_id == u.id ? " selected" : "") + ">" + esc(u.full_name || u.username) + "</option>").join("") + '</select></div>' +
+    '</div>' +
+    '<div class="row">' +
+      '<div class="field"><label>Due Date</label><input class="input" type="datetime-local" id="tk-due" value="' + esc(t && t.due_date ? String(t.due_date).slice(0, 16) : "") + '"></div>' +
+      '<div class="field"><label>Status</label><select class="select" id="tk-status"><option value="pending"' + (!t || t.status === "pending" ? " selected" : "") + '>Pending</option><option value="in_progress"' + (t && t.status === "in_progress" ? " selected" : "") + '>In Progress</option><option value="completed"' + (t && t.status === "completed" ? " selected" : "") + '>Completed</option><option value="cancelled"' + (t && t.status === "cancelled" ? " selected" : "") + '>Cancelled</option></select></div>' +
+    '</div>' +
+    '<div id="tk-pickup-fields" style="display:' + (t && t.task_type === "pickup" ? "block" : "none") + '">' +
+      '<div class="row">' +
+        '<div class="field"><label>Pickup Address</label><input class="input" id="tk-pickup-address" value="' + esc(t ? t.pickup_address : "") + '"></div>' +
+        '<div class="field"><label>Contact Phone</label><input class="input" id="tk-contact" value="' + esc(t ? t.contact_phone : "") + '"></div>' +
+      '</div>' +
+      '<div class="row">' +
+        '<div class="field"><label>Device Type</label><input class="input" id="tk-device" value="' + esc(t ? t.device_type : "") + '"></div>' +
+        '<div class="field"><label>Scheduled Date</label><input class="input" type="datetime-local" id="tk-scheduled" value="' + esc(t && t.scheduled_date ? String(t.scheduled_date).slice(0, 16) : "") + '"></div>' +
+      '</div>' +
+      '<div class="row">' +
+        '<div class="field"><label>Delivery Address</label><input class="input" id="tk-delivery-address" value="' + esc(t ? t.delivery_address : "") + '"></div>' +
+        '<div class="field"><label>Delivery Contact</label><input class="input" id="tk-delivery-contact" value="' + esc(t ? t.delivery_contact : "") + '"></div>' +
+      '</div>' +
+      '<div class="field"><label><input type="checkbox" id="tk-onsite" ' + (t && t.is_onsite_repair == 1 ? "checked" : "") + '> Onsite Repair</label></div>' +
+    '</div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="tk-save">' + (isEdit ? "Update" : "Create") + '</button>'));
+  document.getElementById("tk-type").onchange = (e) => {
+    document.getElementById("tk-pickup-fields").style.display = e.target.value === "pickup" ? "block" : "none";
+  };
+  document.getElementById("tk-save").onclick = async () => {
+    const title = gv("tk-title");
+    if (!title) return toast("Title required", "err");
+    const uid = SESSION.user ? SESSION.user.id : null;
+    if (isEdit) {
+      await exec("UPDATE tasks SET title=?, description=?, task_type=?, priority=?, customer_id=?, assignee_id=?, due_date=?, status=?, pickup_address=?, contact_phone=?, device_type=?, scheduled_date=?, delivery_address=?, delivery_contact=?, is_onsite_repair=?, updated_at=? WHERE id=?",
+        [title, gv("tk-desc"), gv("tk-type"), gv("tk-priority"), gv("tk-cust") || null, gv("tk-assignee") || null, gv("tk-due") || null, gv("tk-status"), gv("tk-pickup-address"), gv("tk-contact"), gv("tk-device"), gv("tk-scheduled") || null, gv("tk-delivery-address"), gv("tk-delivery-contact"), document.getElementById("tk-onsite").checked ? 1 : 0, nowStr(), id]);
+      toast("Task updated", "ok");
+    } else {
+      const uv = uuid();
+      await exec("INSERT INTO tasks (uuid, title, description, task_type, priority, customer_id, assignee_id, due_date, status, pickup_address, contact_phone, device_type, scheduled_date, delivery_address, delivery_contact, is_onsite_repair, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [uv, title, gv("tk-desc"), gv("tk-type"), gv("tk-priority"), gv("tk-cust") || null, gv("tk-assignee") || null, gv("tk-due") || null, gv("tk-status"), gv("tk-pickup-address"), gv("tk-contact"), gv("tk-device"), gv("tk-scheduled") || null, gv("tk-delivery-address"), gv("tk-delivery-contact"), document.getElementById("tk-onsite").checked ? 1 : 0, uid, nowStr(), nowStr()]);
+      toast("Task created", "ok");
+    }
+    closeModal(); navigate("tasks");
+  };
 }
 async function taskInwardForm() {
   const customers = await q("SELECT id, name, phone_primary FROM customers ORDER BY name");
-  openModal(modalHead("\uD83D\uDCE5 New Inward") + modalBody(`
-    <div class="field"><label class="req">Customer</label>
-      <select class="select" id="ti-cust">
-        <option value="">Select</option>
-        ${customers.map(c => `<option value="${c.id}">${esc(c.name)} - ${esc(c.phone_primary||'')}</option>`).join("")}
-      </select>
-    </div>
-    <div class="row">
-      <div class="field"><label>Brand</label><input class="input" id="ti-brand"></div>
-      <div class="field"><label>Model</label><input class="input" id="ti-model"></div>
-    </div>
-    <div class="row">
-      <div class="field"><label>Serial</label><input class="input" id="ti-serial"></div>
-      <div class="field"><label>Device Type</label><input class="input" id="ti-type" value="Laptop"></div>
-    </div>
-    <div class="field"><label>Complaint</label><textarea class="textarea" id="ti-complaint"></textarea></div>
-  `) + modalActions(`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="ti-save">Create</button>`));
+  const standbys = await q("SELECT id, asset_code, model_name, serial_number FROM standby_inventory_pool WHERE status = 'AVAILABLE' ORDER BY asset_code");
+  openModal(modalHead("\uD83D\uDCE5 New Inward") + modalBody(
+    '<div class="field"><label class="req">Customer</label><select class="select" id="ti-cust"><option value="">Select</option>' + customers.map(c => '<option value="' + c.id + '">' + esc(c.name) + ' - ' + esc(c.phone_primary || "") + '</option>').join("") + '</select></div>' +
+    '<div class="row"><div class="field"><label>Brand</label><input class="input" id="ti-brand"></div><div class="field"><label>Model</label><input class="input" id="ti-model"></div></div>' +
+    '<div class="row"><div class="field"><label>Serial</label><input class="input" id="ti-serial"></div><div class="field"><label>Device Type</label><input class="input" id="ti-type" value="Laptop"></div></div>' +
+    '<div class="field"><label>Complaint</label><textarea class="textarea" id="ti-complaint"></textarea></div>' +
+    (standbys.length ? '<div class="field"><label>Allocate Standby (optional)</label><select class="select" id="ti-standby"><option value="">None</option>' + standbys.map(s => '<option value="' + s.id + '">' + esc(s.asset_code + " - " + s.model_name + " (" + s.serial_number + ")") + '</option>').join("") + '</select></div>' : "")
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="ti-save">Create</button>'));
   document.getElementById("ti-save").onclick = async () => {
     const custId = gv("ti-cust");
     if (!custId) return toast("Select customer", "err");
     const c = customers.find(x => x.id == custId);
     const num = await nextNumber("IN", "master_repair_jobs", "entry_number");
     const uv = uuid();
-    await batch([
-      { sql: "INSERT INTO master_repair_jobs (uuid, entry_number, customer_id, customer_name, customer_phone, device_type, brand, model, serial_number, complaint, current_status, inward_date, inward_notes, created_by, source_tab, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args: [uv, num, parseInt(custId), c.name, c.phone_primary, gv("ti-type"), gv("ti-brand"), gv("ti-model"), gv("ti-serial"), gv("ti-complaint"), "INWARD", nowStr(), gv("ti-complaint"), SESSION.user.id, "inward", nowStr(), nowStr()] },
-      { sql: "INSERT INTO material_movement_ledger (job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) SELECT id, 'INWARD_FROM_CLIENT', ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE entry_number=?", args: [c.name, nowStr(), SESSION.user.id, nowStr(), num] }
-    ]);
+    const stbyId = gv("ti-standby") ? parseInt(gv("ti-standby")) : null;
+    const stmts = [
+      { sql: "INSERT INTO master_repair_jobs (uuid, entry_number, customer_id, customer_name, customer_phone, device_type, brand, model, serial_number, complaint, current_status, inward_date, inward_notes, created_by, source_tab, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args: [uv, num, parseInt(custId), c.name, c.phone_primary, gv("ti-type"), gv("ti-brand"), gv("ti-model"), gv("ti-serial"), gv("ti-complaint"), "INWARD", nowStr(), gv("ti-complaint"), SESSION.user.id, "inward", nowStr(), nowStr()] }
+    ];
+    if (stbyId) {
+      stmts.push({ sql: "UPDATE master_repair_jobs SET linked_standby_id = ?, standby_issued_date = ? WHERE entry_number = ?", args: [stbyId, nowStr(), num] });
+      stmts.push({ sql: "UPDATE standby_inventory_pool SET status = 'LOANED', updated_at = ? WHERE id = ?", args: [nowStr(), stbyId] });
+    }
+    stmts.push({ sql: "INSERT INTO material_movement_ledger (job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) SELECT id, 'INWARD_FROM_CLIENT', ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE entry_number=?", args: [c.name, nowStr(), SESSION.user.id, nowStr(), num] });
+    if (stbyId) {
+      stmts.push({ sql: "INSERT INTO material_movement_ledger (job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) SELECT j.id, 'STANDBY_ISSUED', ?, ?, ?, ?, 'pending' FROM master_repair_jobs j WHERE j.entry_number = ?", args: [c.name + " - loaner", nowStr(), SESSION.user.id, nowStr(), num] });
+    }
+    await batch(stmts);
     toast("Inward " + num + " created", "ok"); closeModal(); navigate("tasks");
+  };
+}
+async function newOutwardForm() {
+  const customers = await q("SELECT id, name, phone_primary FROM customers ORDER BY name");
+  openModal(modalHead("\u27A1\uFE0F New Outward") + modalBody(
+    '<div class="field"><label class="req">Customer</label><select class="select" id="no-cust"><option value="">Select</option>' + customers.map(c => '<option value="' + c.id + '">' + esc(c.name) + ' - ' + esc(c.phone_primary || "") + '</option>').join("") + '</select></div>' +
+    '<div class="row"><div class="field"><label>Brand</label><input class="input" id="no-brand"></div><div class="field"><label>Model</label><input class="input" id="no-model"></div></div>' +
+    '<div class="row"><div class="field"><label>Serial</label><input class="input" id="no-serial"></div><div class="field"><label>Device Type</label><input class="input" id="no-type" value="Laptop"></div></div>' +
+    '<div class="field"><label>Complaint</label><textarea class="textarea" id="no-complaint"></textarea></div>' +
+    '<div class="row"><div class="field"><label class="req">Factory/Service Center</label><input class="input" id="no-factory" placeholder="e.g. Dell Service"></div><div class="field"><label>Contact</label><input class="input" id="no-contact"></div></div>' +
+    '<div class="field"><label>Courier Tracking</label><input class="input" id="no-courier"></div>' +
+    '<div class="field"><label>Outward Notes</label><textarea class="textarea" id="no-notes"></textarea></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="no-save">Create</button>'));
+  document.getElementById("no-save").onclick = async () => {
+    const custId = gv("no-cust");
+    const factory = gv("no-factory");
+    if (!custId) return toast("Select customer", "err");
+    if (!factory) return toast("Factory name required", "err");
+    const c = customers.find(x => x.id == custId);
+    const num = await nextNumber("OUT", "master_repair_jobs", "entry_number");
+    const uv = uuid();
+    const contact = gv("no-contact");
+    const notes = gv("no-notes") + (contact ? " | Contact: " + contact : "");
+    await batch([
+      { sql: "INSERT INTO master_repair_jobs (uuid, entry_number, customer_id, customer_name, customer_phone, device_type, brand, model, serial_number, complaint, current_status, factory_name, courier_tracking_no, outward_date, outward_notes, created_by, source_tab, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args: [uv, num, parseInt(custId), c.name, c.phone_primary, gv("no-type"), gv("no-brand"), gv("no-model"), gv("no-serial"), gv("no-complaint"), "AT_FACTORY", factory, gv("no-courier"), nowStr(), notes, SESSION.user.id, "outward", nowStr(), nowStr()] },
+      { sql: "INSERT INTO material_movement_ledger (job_id, movement_type, party_name, courier_tracking_no, technician_notes, movement_date, created_by, created_at, sync_status) SELECT id, 'OUTWARD_TO_FACTORY', ?, ?, ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE entry_number=?", args: [factory, gv("no-courier"), notes, nowStr(), SESSION.user.id, nowStr(), num] }
+    ]);
+    toast("Outward " + num + " created", "ok"); closeModal(); navigate("tasks");
+  };
+}
+async function sendToFactoryDialog(jobIds) {
+  openModal(modalHead("Send to Service Center") + modalBody(
+    '<p style="margin-bottom:10px">Sending <b>' + jobIds.length + '</b> item(s) to service center.</p>' +
+    '<div class="field"><label class="req">Service Center</label><input class="input" id="sf-factory" placeholder="Service center name"></div>' +
+    '<div class="field"><label>Contact</label><input class="input" id="sf-contact" placeholder="Contact person / phone"></div>' +
+    '<div class="field"><label>Notes</label><textarea class="textarea" id="sf-notes" placeholder="Notes about what is being sent"></textarea></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" style="background:#ec4899" id="sf-save">Send to Service Center</button>'));
+  document.getElementById("sf-save").onclick = async () => {
+    const factory = gv("sf-factory");
+    if (!factory) return toast("Service center name required", "err");
+    const contact = gv("sf-contact");
+    const notes = gv("sf-notes") + (contact ? " | Contact: " + contact : "");
+    const stmts = [];
+    for (const id of jobIds) {
+      stmts.push({ sql: "UPDATE master_repair_jobs SET current_status='AT_FACTORY', factory_name=?, courier_tracking_no='', outward_date=?, outward_notes=?, updated_at=? WHERE id=? AND current_status='INWARD'", args: [factory, nowStr(), notes, nowStr(), id] });
+      stmts.push({ sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, courier_tracking_no, technician_notes, movement_date, created_by, created_at, sync_status) SELECT ?, id, 'OUTWARD_TO_FACTORY', ?, '', ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE id=?", args: [uuid(), factory, notes, nowStr(), SESSION.user.id, nowStr(), id] });
+    }
+    await batch(stmts);
+    toast("Sent " + jobIds.length + " item(s) to service center", "ok");
+    closeModal(); VIEW_STATE.tasks.selected = []; navigate("tasks");
+  };
+}
+async function batchSendToFactory() {
+  const ids = VIEW_STATE.tasks.selected.filter(id => true);
+  if (!ids.length) return toast("No items selected", "err");
+  sendToFactoryDialog(ids);
+}
+async function receiveFromFactoryDialog(jobIds) {
+  openModal(modalHead("Receive Back from Service Center") + modalBody(
+    '<p style="margin-bottom:10px">Receiving <b>' + jobIds.length + '</b> item(s) back from factory.</p>' +
+    '<div class="field"><label>Notes</label><textarea class="textarea" id="rf-notes" placeholder="Condition when received back..."></textarea></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" style="background:#8b5cf6" id="rf-save">Receive Back</button>'));
+  document.getElementById("rf-save").onclick = async () => {
+    const notes = gv("rf-notes");
+    const stmts = [];
+    for (const id of jobIds) {
+      stmts.push({ sql: "UPDATE master_repair_jobs SET current_status='BACK_IN_STORE', received_date=?, received_notes=?, updated_at=? WHERE id=? AND current_status='AT_FACTORY'", args: [nowStr(), notes, nowStr(), id] });
+      stmts.push({ sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, technician_notes, movement_date, created_by, created_at, sync_status) SELECT ?, id, 'INWARD_FROM_FACTORY', factory_name, ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE id=?", args: [uuid(), notes, nowStr(), SESSION.user.id, nowStr(), id] });
+    }
+    await batch(stmts);
+    toast("Received " + jobIds.length + " item(s)", "ok");
+    closeModal(); VIEW_STATE.tasks.selected = []; navigate("tasks");
+  };
+}
+async function batchReceiveFromFactory() {
+  const ids = VIEW_STATE.tasks.selected.filter(id => true);
+  if (!ids.length) return toast("No items selected", "err");
+  receiveFromFactoryDialog(ids);
+}
+async function deliverJobDialog(jobId, hasStandby) {
+  hasStandby = hasStandby === true || hasStandby === "true";
+  const warning = hasStandby ? '<div style="background:#fef3c7;color:#92400e;border:1px solid #fbbf24;border-radius:6px;padding:10px;font-size:11px;margin-bottom:10px">Note: A standby device is still allocated. Return it from Standby tab if needed.</div>' : '';
+  openModal(modalHead("\uD83D\uDE9A Deliver Device") + modalBody(
+    warning +
+    '<div class="field"><label>Collected By</label><input class="input" id="dj-collected" placeholder="Name of person collecting"></div>' +
+    '<div class="field"><label>Customer Charge (Rs.)</label><input class="input" type="number" id="dj-charge" value="0" step="0.01"></div>' +
+    '<div class="field"><label>Delivery Notes</label><textarea class="textarea" id="dj-notes" placeholder="Any additional delivery notes..."></textarea></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" style="background:#22c55e" id="dj-save">Deliver</button>'));
+  document.getElementById("dj-save").onclick = async () => {
+    const collected = gv("dj-collected");
+    const charge = parseFloat(gv("dj-charge")) || 0;
+    const notes = gv("dj-notes");
+    let deliveryNotes = "";
+    if (collected) deliveryNotes += "Collected by: " + collected;
+    if (notes) deliveryNotes += (deliveryNotes ? "\n" : "") + notes;
+    const stmts = [
+      { sql: "UPDATE master_repair_jobs SET current_status='DELIVERED', customer_charge=?, received_notes=COALESCE(?, received_notes), delivered_date=?, updated_at=? WHERE id=? AND current_status='BACK_IN_STORE'", args: [charge, deliveryNotes || null, nowStr(), nowStr(), jobId] },
+      { sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, cost_or_charge, technician_notes, movement_date, created_by, created_at, sync_status) SELECT ?, id, 'OUTWARD_TO_CLIENT', customer_name, ?, ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE id=?", args: [uuid(), charge, deliveryNotes, nowStr(), SESSION.user.id, nowStr(), jobId] }
+    ];
+    await batch(stmts);
+    toast("Delivered", "ok");
+    closeModal(); navigate("tasks");
+  };
+}
+async function allocateStandby(jobId) {
+  const standbys = await q("SELECT id, asset_code, model_name, serial_number, condition FROM standby_inventory_pool WHERE status = 'AVAILABLE' ORDER BY asset_code");
+  if (!standbys.length) return toast("No standby devices available", "err");
+  openModal(modalHead("Allocate Standby") + modalBody(
+    '<div class="field"><label>Select Standby Device</label><select class="select" id="as-stby">' + standbys.map(s => '<option value="' + s.id + '">' + esc(s.asset_code + " - " + s.model_name + " (S/N: " + s.serial_number + ")") + '</option>').join("") + '</select></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" style="background:#f59e0b" id="as-save">Allocate</button>'));
+  document.getElementById("as-save").onclick = async () => {
+    const stbyId = parseInt(gv("as-stby"));
+    const stmts = [
+      { sql: "UPDATE master_repair_jobs SET linked_standby_id=?, standby_issued_date=?, updated_at=? WHERE id=?", args: [stbyId, nowStr(), nowStr(), jobId] },
+      { sql: "UPDATE standby_inventory_pool SET status='LOANED', updated_at=? WHERE id=?", args: [nowStr(), stbyId] },
+      { sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) SELECT ?, id, 'STANDBY_ISSUED', customer_name || \' - loaner\', ?, ?, ?, ?, 'pending' FROM master_repair_jobs WHERE id=?", args: [uuid(), nowStr(), SESSION.user.id, nowStr(), jobId] }
+    ];
+    await batch(stmts);
+    toast("Standby allocated", "ok");
+    closeModal(); navigate("tasks");
+  };
+}
+async function returnStandbyOnly(jobId) {
+  confirmBox("Return standby device for this job?", async () => {
+    const job = await q1("SELECT j.*, s.model_name AS stby_model FROM master_repair_jobs j LEFT JOIN standby_inventory_pool s ON s.id = j.linked_standby_id WHERE j.id = ?", [jobId]);
+    if (!job || !job.linked_standby_id) return toast("No standby linked", "err");
+    const stmts = [
+      { sql: "UPDATE standby_inventory_pool SET status='AVAILABLE', updated_at=? WHERE id=?", args: [nowStr(), job.linked_standby_id] },
+      { sql: "UPDATE master_repair_jobs SET linked_standby_id=NULL, standby_issued_date=NULL, updated_at=? WHERE id=?", args: [nowStr(), jobId] },
+      { sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?, 'pending')", args: [uuid(), jobId, "STANDBY_RECLAIMED", (job.customer_name || "") + " - returned", nowStr(), SESSION.user.id, nowStr()] }
+    ];
+    await batch(stmts);
+    toast("Standby returned", "ok");
+    navigate("tasks");
+  }, "Return Standby");
+}
+async function returnStandbyFromPool(stbyId) {
+  confirmBox("Mark this standby as returned/available?", async () => {
+    const s = await q1("SELECT * FROM standby_inventory_pool WHERE id = ?", [stbyId]);
+    if (!s) return;
+    const linked = await q1("SELECT * FROM master_repair_jobs WHERE linked_standby_id = ?", [stbyId]);
+    const stmts = [
+      { sql: "UPDATE standby_inventory_pool SET status='AVAILABLE', updated_at=? WHERE id=?", args: [nowStr(), stbyId] }
+    ];
+    if (linked) {
+      stmts.push({ sql: "UPDATE master_repair_jobs SET linked_standby_id=NULL, standby_issued_date=NULL, updated_at=? WHERE id=?", args: [nowStr(), linked.id] });
+      stmts.push({ sql: "INSERT INTO material_movement_ledger (uuid, job_id, movement_type, party_name, movement_date, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?, 'pending')", args: [uuid(), linked.id, "STANDBY_RECLAIMED", (linked.customer_name || "") + " - returned", nowStr(), SESSION.user.id, nowStr()] });
+    }
+    await batch(stmts);
+    toast("Standby returned", "ok");
+    navigate("tasks");
+  }, "Return Standby");
+}
+async function standbyForm(id) {
+  const isEdit = id != null;
+  const s = isEdit ? await q1("SELECT * FROM standby_inventory_pool WHERE id = ?", [id]) : null;
+  openModal(modalHead((isEdit ? "Edit" : "Add") + " Standby Device") + modalBody(
+    '<div class="field"><label class="req">Asset Code</label><input class="input" id="sb-code" value="' + esc(s ? s.asset_code : "") + '" placeholder="e.g. STB-001"></div>' +
+    '<div class="field"><label>Model Name</label><input class="input" id="sb-model" value="' + esc(s ? s.model_name : "") + '" placeholder="e.g. Dell Latitude 5520"></div>' +
+    '<div class="field"><label>Serial #</label><input class="input" id="sb-serial" value="' + esc(s ? s.serial_number : "") + '"></div>' +
+    '<div class="field"><label>Condition</label><input class="input" id="sb-condition" value="' + esc(s ? s.condition : "") + '" placeholder="Good / Fair / Poor"></div>' +
+    '<div class="field"><label>Purchase Cost (Rs.)</label><input class="input" type="number" id="sb-cost" value="' + (s ? (s.purchase_cost || 0) : 0) + '" step="0.01"></div>'
+  ) + modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="sb-save">' + (isEdit ? "Update" : "Save") + '</button>'));
+  document.getElementById("sb-save").onclick = async () => {
+    const code = gv("sb-code");
+    if (!code) return toast("Asset code required", "err");
+    if (isEdit) {
+      await exec("UPDATE standby_inventory_pool SET asset_code=?, model_name=?, serial_number=?, condition=?, purchase_cost=?, updated_at=? WHERE id=?", [code, gv("sb-model"), gv("sb-serial"), gv("sb-condition"), parseFloat(gv("sb-cost")) || 0, nowStr(), id]);
+      toast("Updated", "ok");
+    } else {
+      const uv = uuid();
+      await exec("INSERT INTO standby_inventory_pool (uuid, asset_code, model_name, serial_number, condition, status, purchase_cost, created_at, updated_at) VALUES (?,?,?,?,?, 'AVAILABLE',?,?,?)", [uv, code, gv("sb-model"), gv("sb-serial"), gv("sb-condition"), parseFloat(gv("sb-cost")) || 0, nowStr(), nowStr()]);
+      toast("Added", "ok");
+    }
+    closeModal(); navigate("tasks");
   };
 }
 
