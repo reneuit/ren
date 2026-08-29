@@ -773,7 +773,7 @@ async function customerForm(id){
       const code = await nextNumber("CUS","customers","customer_code");
       const customer_code = code.includes("CUS")?code:(prefix+String(Date.now()).slice(-4));
       const uv = uuid();
-      await exec("INSERT INTO customers (uuid, customer_code, name, company, gstin, address, city, state, pincode, phone_primary, phone_secondary, email, whatsapp, customer_type, notes, balance, total_visits, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?, 'pending')",
+      await exec("INSERT INTO customers (uuid, customer_code, name, company, gstin, address, city, state, pincode, phone_primary, phone_secondary, email, whatsapp, customer_type, notes, balance, total_visits, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,1,?,?,?, 'pending')",
         [uv, customer_code, name, gv("cf-company"), gv("cf-gstin"), gv("cf-addr"), gv("cf-city"), gv("cf-state"), gv("cf-pin"), phone, gv("cf-phone2"), gv("cf-email"), gv("cf-wapp"), gv("cf-type"), gv("cf-notes"), SESSION.user.id, nowStr(), nowStr()]);
       toast("Created "+customer_code,"ok");
     }
@@ -1579,7 +1579,7 @@ async function convertLead(id){
   const code=await nextNumber("CUS","customers","customer_code");
   const uv=uuid();
   const custCode = code.includes("CUS")?code:prefix+"0001";
-  await exec("INSERT INTO customers (uuid, customer_code, name, company, phone_primary, email, address, notes, customer_type, balance, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
+  await exec("INSERT INTO customers (uuid, customer_code, name, company, phone_primary, email, address, notes, customer_type, balance, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,0,1,?,?,?, 'pending')",
     [uv,custCode,lead.name,lead.company||"",lead.phone||"",lead.email||"",lead.address||"",lead.requirement||"","retail",SESSION.user.id,nowStr(),nowStr()]);
   const custRow=await q1("SELECT id FROM customers WHERE customer_code=?",[custCode]);
   const custId=custRow?custRow.id:null;
