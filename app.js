@@ -64,8 +64,8 @@
                          notes, total_devices_sent, created_at
    ===================================================================== */
 
-let TURSO_URL = "https://ren-reneuit.aws-ap-south-1.turso.io";
-let TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODc5MjY3NjMsImlkIjoiMDFhMDQ4YmMtZjIwMS03ZjgxLTk3YWUtMTM5OTIxZTA0ZWU1Iiwia2lkIjoidXAxUkptTmREX1VfcVUwVTNxWUU5QUxsUnNxQTNZam5IQ2VUc0xKSGZLRSIsInJpZCI6IjM3NzMwZjUxLTlmNTYtNGQ2NS1iMTE0LTllNzZlZGJmMjNiZCJ9.gdD-bwAdtvtU5scXbCWvcu5DKbUQNPYrXPQ5J70ddZcu795GIQY3IbwGf5DHOlw86N3bWzRY9zLz4aUhPX5UAw";
+let TURSO_URL = "libsql://ren-reneuit.aws-ap-south-1.turso.io";
+let TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODgyNDk3MjIsImlkIjoiMDFhMDQ4YmMtZjIwMS03ZjgxLTk3YWUtMTM5OTIxZTA0ZWU1Iiwia2lkIjoidXAxUkptTmREX1VfcVUwVTNxWUU5QUxsUnNxQTNZam5IQ2VUc0xKSGZLRSIsInJpZCI6IjM3NzMwZjUxLTlmNTYtNGQ2NS1iMTE0LTllNzZlZGJmMjNiZCJ9.UWz_Xwq-PhkeaX0oaLF27dujLoE5uSPZcIYKUpy_s06MN9P8-ANdyzz99hM6i1a-pH2J6kw-3lmuMgXm3-UpDg";
 const DESKTOP_ID = "W1";
 try {
   const ovr = localStorage.getItem("turso_override");
