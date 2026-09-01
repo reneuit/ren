@@ -627,6 +627,12 @@ async function moveToRecycle(source_table, source_id, item_name, item_summary, j
     return true;
   }catch(e){ console.warn("recycle insert failed",e); return false; }
 }
+async function recordCloudDeletion(table_name, record_id, record_pk){
+  try{
+    await exec("INSERT INTO deleted_records (table_name, record_id, record_pk, deleted_at, pushed) VALUES (?,?,?,?,1)",
+      [table_name, record_id, String(record_pk||record_id), nowStr()], true);
+  }catch(e){ /* best effort */ }
+}
 const ROLE_LABELS = { super_admin:"Super Admin", admin:"Admin", receptionist:"Receptionist", technician:"Technician", accounts:"Accounts", store:"Store", delivery_exec:"Delivery Exec", pickup_exec:"Pickup Exec", amc_manager:"AMC Manager", sales:"Sales", operations:"Operations" };
 const DEFAULT_PASSWORDS = { admin:"admin123", reception:"recep123", technician:"tech123", accounts:"acc123", store:"store123" };
 const FREQUENCY_MAP = { Monthly:30, Quarterly:90, "Half Yearly":180, Yearly:365 };
@@ -834,6 +840,7 @@ async function deleteCustomer(id){
       {sql:"DELETE FROM customers WHERE id=?",args:[id]}
     ]);
     if(r===null||r===undefined) return toast("Delete failed","error");
+    await recordCloudDeletion("customers", id, id);
     toast("Customer moved to recycle bin","ok");
     VIEWS.customers();
   },"Delete Customer");
@@ -1083,6 +1090,7 @@ async function deleteJob(id){
       {sql:"DELETE FROM jobs WHERE id=?",args:[id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
+    await recordCloudDeletion("jobs", id, job.job_number);
     toast("Deleted","ok"); VIEWS.jobs();
   },"Delete Job");
 }
@@ -1724,6 +1732,7 @@ async function deleteLead(id){
       {sql:"DELETE FROM leads WHERE id=?",args:[id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
+    await recordCloudDeletion("leads", id, lead.name);
     toast("Deleted","ok"); VIEWS.leads();
   },"Delete Lead");
 }
@@ -1909,6 +1918,7 @@ async function deleteOrder(id){
       {sql:"DELETE FROM orders WHERE id=?",args:[id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
+    await recordCloudDeletion("orders", id, o.order_number);
     toast("Deleted","ok"); VIEWS.orders();
   },"Delete Order");
 }
@@ -2297,6 +2307,7 @@ async function deleteAMC(id){
       {sql:"DELETE FROM amc_contracts WHERE id=?",args:[id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
+    await recordCloudDeletion("amc_contracts", id, contract.contract_number);
     toast("Deleted","ok"); VIEWS.amc();
   },"Delete Contract");
 }
@@ -2442,6 +2453,7 @@ async function deleteProduct(id){
       {sql:"DELETE FROM products WHERE id=?",args:[id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
+    await recordCloudDeletion("products", id, prod.code);
     toast("Deleted","ok"); VIEWS.inventory();
   },"Delete Product");
 }
@@ -3180,6 +3192,7 @@ async function deleteTransaction(id){
     const t=await q1("SELECT * FROM transactions WHERE id=?",[id]); if(!t) return;
     await moveToRecycle("transactions", id, t.description||"", "Amount "+fmtMoney(t.amount), JSON.stringify(t));
     await exec("DELETE FROM transactions WHERE id=?",[id]);
+    await recordCloudDeletion("transactions", id, id);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Transaction");
 }
@@ -3213,6 +3226,7 @@ async function deleteExpense(id){
     const e=await q1("SELECT * FROM expenses WHERE id=?",[id]); if(!e) return;
     await moveToRecycle("expenses", id, e.description||"", "Amount "+fmtMoney(e.amount), JSON.stringify(e));
     await exec("DELETE FROM expenses WHERE id=?",[id]);
+    await recordCloudDeletion("expenses", id, id);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Expense");
 }
