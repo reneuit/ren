@@ -1638,8 +1638,8 @@ async function leadForm(id, viewOnly){
     } else {
       const num=await nextNumber("LD","leads","lead_number");
       const uv=uuid();
-      const insOk = await exec("INSERT INTO leads (uuid, lead_number, lead_type, source, name, company, phone, email, contact_person, status, assigned_to, device_type, device_brand, device_model, requirement, address, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
-        [uv,num,gv("lf-type"),gv("lf-source"),name,gv("lf-company"),phone,gv("lf-email"),gv("lf-contact"),gv("lf-status"), gv("lf-assigned")||null, gv("lf-dtype"), gv("lf-brand"), gv("lf-model"), gv("lf-req"), gv("lf-addr"), "", SESSION.user.id, nowStr(), nowStr()]);
+      const insOk = await exec("INSERT INTO leads (uuid, lead_number, lead_type, source, name, company, phone, email, contact_person, status, assigned_to, device_type, device_brand, device_model, requirement, address, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
+        [uv,num,gv("lf-type"),gv("lf-source"),name,gv("lf-company"),phone,gv("lf-email"),gv("lf-contact"),gv("lf-status"),gv("lf-assigned")||null,gv("lf-dtype"),gv("lf-brand"),gv("lf-model"),gv("lf-req"),gv("lf-addr"),"",SESSION.user.id,nowStr(),nowStr()]);
       if(!insOk){ toast("Failed to create lead. Check console for error.","error"); return; }
       const newIdRow=await q1("SELECT id FROM leads WHERE lead_number=?",[num]);
       if(newIdRow) await exec("INSERT INTO lead_activities (lead_id, activity_type, note, created_by, created_at) VALUES (?,?,?, ?,?)",[newIdRow.id,"created","Lead created - "+name, SESSION.user.id, nowStr()]);
