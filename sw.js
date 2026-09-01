@@ -2,7 +2,7 @@
    - Caches the app shell for instant load
    - Network-first for Turso API calls (always fresh data)
    - Falls back to cache if offline */
-const CACHE = "ap-crm-v12";
+const CACHE = "ap-crm-v13";
 const SHELL = [
   "./",
   "./index.html",
