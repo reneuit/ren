@@ -99,7 +99,7 @@ async function _pipeline(stmts) {
     headers: { "Authorization": "Bearer " + TURSO_TOKEN, "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
-  if (!r.ok) throw new Error("Turso HTTP " + r.status);
+  if (!r.ok) { const txt = await r.text().catch(()=>""); throw new Error("Turso HTTP " + r.status + " " + txt.slice(0,200)); }
   const data = await r.json();
   const out = [];
   for (const res of data.results) {
@@ -118,8 +118,8 @@ async function _pipeline(stmts) {
 }
 async function q(sql, args) { try { return (await _pipeline([{ sql, args }]))[0] || []; } catch (e) { console.warn("q() failed:", sql, e); return []; } }
 async function q1(sql, args) { try { const rows = await q(sql, args); return rows[0] || null; } catch (e) { console.warn("q1() failed:", sql, e); return null; } }
-async function exec(sql, args) { try { await _pipeline([{ sql, args }]); return true; } catch (e) { console.warn("exec() failed:", sql, e); return false; } }
-async function batch(stmts) { try { return await _pipeline(stmts); } catch (e) { console.warn("batch() failed:", e); return []; } }
+async function exec(sql, args, silent) { try { await _pipeline([{ sql, args }]); return true; } catch (e) { console.error("exec() failed:", sql, e); if(!silent) toast("Save failed: "+((e.message||"").slice(0,120)),"error"); return false; } }
+async function batch(stmts, silent) { try { return await _pipeline(stmts); } catch (e) { console.error("batch() failed:", e); if(!silent) toast("Save failed: "+((e.message||"").slice(0,120)),"error"); return []; } }
 
 async function nextNumber(tag, table, column) {
   try {
@@ -822,16 +822,18 @@ async function deleteCustomer(id){
     // capture json
     const json_data = JSON.stringify(cust);
     await moveToRecycle("customers", id, cust.name, "Balance "+fmtMoney(cust.balance||0), json_data);
-    // handle children: we can't fully cascade via HTTP, but we soft-delete customer and unlink
-    await exec("UPDATE jobs SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE leads SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE leads SET converted_customer_id=NULL WHERE converted_customer_id=?",[id]);
-    await exec("UPDATE orders SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE pickups SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE deliveries SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE amc_contracts SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("UPDATE invoices SET customer_id=NULL WHERE customer_id=?",[id]);
-    await exec("DELETE FROM customers WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"UPDATE jobs SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE leads SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE leads SET converted_customer_id=NULL WHERE converted_customer_id=?",args:[id]},
+      {sql:"UPDATE orders SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE pickups SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE deliveries SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE amc_contracts SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE invoices SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"DELETE FROM customers WHERE id=?",args:[id]}
+    ]);
+    if(r===null||r===undefined) return toast("Delete failed","error");
     toast("Customer moved to recycle bin","ok");
     VIEWS.customers();
   },"Delete Customer");
@@ -1017,8 +1019,11 @@ async function viewJobTimeline(id){
 async function addJobComment(id){
   const note = gv("tl-comment");
   if(!note) return toast("Enter comment","err");
-  await exec("INSERT INTO job_activities (job_id, activity_type, note, created_by, created_at) VALUES (?,?,?,?,?)",[id,"comment",note, SESSION.user.id, nowStr()]);
-  await exec("UPDATE jobs SET updated_at=? WHERE id=?",[nowStr(), id]);
+  const r=await batch([
+    {sql:"INSERT INTO job_activities (job_id, activity_type, note, created_by, created_at) VALUES (?,?,?,?,?)",args:[id,"comment",note, SESSION.user.id, nowStr()]},
+    {sql:"UPDATE jobs SET updated_at=? WHERE id=?",args:[nowStr(), id]}
+  ]);
+  if(!r||!r.length) return toast("Failed to add comment","error");
   toast("Comment added","ok"); closeModal(); viewJobTimeline(id);
 }
 async function workOnJob(id){
@@ -1068,14 +1073,16 @@ async function deleteJob(id){
     await moveToRecycle("jobs", id, job.job_number, job.complaint||"", JSON.stringify(job));
     const parts = await q("SELECT * FROM job_parts WHERE job_id=?",[id]);
     const acts = await q("SELECT * FROM job_activities WHERE job_id=?",[id]);
-    // store children in recycle json? simplified
-    await exec("DELETE FROM job_parts WHERE job_id=?",[id]);
-    await exec("DELETE FROM job_activities WHERE job_id=?",[id]);
-    await exec("DELETE FROM job_documents WHERE job_id=?",[id]);
-    await exec("UPDATE pickups SET job_id=NULL WHERE job_id=?",[id]);
-    await exec("UPDATE deliveries SET job_id=NULL WHERE job_id=?",[id]);
-    await exec("UPDATE invoices SET job_id=NULL WHERE job_id=?",[id]);
-    await exec("DELETE FROM jobs WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"DELETE FROM job_parts WHERE job_id=?",args:[id]},
+      {sql:"DELETE FROM job_activities WHERE job_id=?",args:[id]},
+      {sql:"DELETE FROM job_documents WHERE job_id=?",args:[id]},
+      {sql:"UPDATE pickups SET job_id=NULL WHERE job_id=?",args:[id]},
+      {sql:"UPDATE deliveries SET job_id=NULL WHERE job_id=?",args:[id]},
+      {sql:"UPDATE invoices SET job_id=NULL WHERE job_id=?",args:[id]},
+      {sql:"DELETE FROM jobs WHERE id=?",args:[id]}
+    ]);
+    if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.jobs();
   },"Delete Job");
 }
@@ -1631,8 +1638,9 @@ async function leadForm(id, viewOnly){
     } else {
       const num=await nextNumber("LD","leads","lead_number");
       const uv=uuid();
-      await exec("INSERT INTO leads (uuid, lead_number, lead_type, source, name, company, phone, email, contact_person, status, assigned_to, device_type, device_brand, device_model, requirement, address, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
+      const insOk = await exec("INSERT INTO leads (uuid, lead_number, lead_type, source, name, company, phone, email, contact_person, status, assigned_to, device_type, device_brand, device_model, requirement, address, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
         [uv,num,gv("lf-type"),gv("lf-source"),name,gv("lf-company"),phone,gv("lf-email"),gv("lf-contact"),gv("lf-status"), gv("lf-assigned")||null, gv("lf-dtype"), gv("lf-brand"), gv("lf-model"), gv("lf-req"), gv("lf-addr"), "", SESSION.user.id, nowStr(), nowStr()]);
+      if(!insOk){ toast("Failed to create lead. Check console for error.","error"); return; }
       const newIdRow=await q1("SELECT id FROM leads WHERE lead_number=?",[num]);
       if(newIdRow) await exec("INSERT INTO lead_activities (lead_id, activity_type, note, created_by, created_at) VALUES (?,?,?, ?,?)",[newIdRow.id,"created","Lead created - "+name, SESSION.user.id, nowStr()]);
       toast("Created "+num,"ok");
@@ -1710,9 +1718,12 @@ async function deleteLead(id){
   confirmBox("Delete this lead? All activities and related orders will also be affected. It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const lead=await q1("SELECT * FROM leads WHERE id=?",[id]); if(!lead) return;
     await moveToRecycle("leads", id, lead.name, "Source "+(lead.source||"")+" Status "+lead.status, JSON.stringify(lead));
-    await exec("DELETE FROM lead_activities WHERE lead_id=?",[id]);
-    await exec("UPDATE orders SET lead_id=NULL WHERE lead_id=?",[id]);
-    await exec("DELETE FROM leads WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"DELETE FROM lead_activities WHERE lead_id=?",args:[id]},
+      {sql:"UPDATE orders SET lead_id=NULL WHERE lead_id=?",args:[id]},
+      {sql:"DELETE FROM leads WHERE id=?",args:[id]}
+    ]);
+    if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.leads();
   },"Delete Lead");
 }
@@ -1893,8 +1904,11 @@ async function deleteOrder(id){
   confirmBox("Delete this order? All activities will also be affected. It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const o=await q1("SELECT * FROM orders WHERE id=?",[id]); if(!o) return;
     await moveToRecycle("orders", id, o.order_number, "Customer "+o.customer_name, JSON.stringify(o));
-    await exec("DELETE FROM order_activities WHERE order_id=?",[id]);
-    await exec("DELETE FROM orders WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"DELETE FROM order_activities WHERE order_id=?",args:[id]},
+      {sql:"DELETE FROM orders WHERE id=?",args:[id]}
+    ]);
+    if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.orders();
   },"Delete Order");
 }
@@ -2277,9 +2291,12 @@ async function deleteAMC(id){
     const visits=await q("SELECT * FROM amc_visits WHERE contract_id=?",[id]);
     const complaints=await q("SELECT * FROM amc_complaints WHERE contract_id=?",[id]);
     await moveToRecycle("amc_contracts", id, contract.contract_number, "Customer "+contract.customer_id, JSON.stringify({contract, visits, complaints}));
-    await exec("DELETE FROM amc_visits WHERE contract_id=?",[id]);
-    await exec("DELETE FROM amc_complaints WHERE contract_id=?",[id]);
-    await exec("DELETE FROM amc_contracts WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"DELETE FROM amc_visits WHERE contract_id=?",args:[id]},
+      {sql:"DELETE FROM amc_complaints WHERE contract_id=?",args:[id]},
+      {sql:"DELETE FROM amc_contracts WHERE id=?",args:[id]}
+    ]);
+    if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.amc();
   },"Delete Contract");
 }
@@ -2417,11 +2434,14 @@ async function deleteProduct(id){
   confirmBox("Delete this product? Related records will be unlinked. It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const prod=await q1("SELECT * FROM products WHERE id=?",[id]); if(!prod) return;
     await moveToRecycle("products", id, prod.name, "Code "+(prod.code||''), JSON.stringify(prod));
-    await exec("UPDATE job_parts SET product_id=NULL WHERE product_id=?",[id]);
-    await exec("DELETE FROM stock_movements WHERE product_id=?",[id]);
-    await exec("UPDATE purchase_order_items SET product_id=NULL WHERE product_id=?",[id]);
-    await exec("UPDATE invoice_items SET product_id=NULL WHERE product_id=?",[id]);
-    await exec("DELETE FROM products WHERE id=?",[id]);
+    const r=await batch([
+      {sql:"UPDATE job_parts SET product_id=NULL WHERE product_id=?",args:[id]},
+      {sql:"DELETE FROM stock_movements WHERE product_id=?",args:[id]},
+      {sql:"UPDATE purchase_order_items SET product_id=NULL WHERE product_id=?",args:[id]},
+      {sql:"UPDATE invoice_items SET product_id=NULL WHERE product_id=?",args:[id]},
+      {sql:"DELETE FROM products WHERE id=?",args:[id]}
+    ]);
+    if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.inventory();
   },"Delete Product");
 }
@@ -2678,7 +2698,7 @@ async function savePOS(){
   const stmts=[];
   stmts.push({sql:"INSERT INTO invoices (uuid, invoice_number, invoice_type, invoice_date, customer_id, job_id, subtotal, discount_amount, taxable_amount, grand_total, paid_amount, balance, payment_mode, payment_status, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args:[uv,num,"invoice",todayStr(),custId, VIEW_STATE.billing.jobId||null, subtotal, discount, subtotal, grandTotal, paid, Math.max(balance,0), VIEW_STATE.billing.payMode, payStatus, SESSION.user.id, nowStr(), nowStr()]});
   // we need invoice id for items, so do batch with separate exec after? We'll do sequential via batch needing id: We'll insert then query id, then insert items in batch.
-  await batch(stmts);
+  const r0=await batch(stmts); if(!r0||!r0.length) return toast("Failed to create invoice","error");
   const invRow=await q1("SELECT id FROM invoices WHERE invoice_number=?",[num]);
   const invId=invRow?invRow.id:null;
   if(!invId) return toast("Failed to create invoice","err");
@@ -2698,7 +2718,7 @@ async function savePOS(){
     itemStmts.push({sql:"INSERT INTO payments (receipt_number, invoice_id, customer_id, amount, payment_mode, payment_date, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,?, 'pending')", args:[rcp, invId, custId, paid, VIEW_STATE.billing.payMode, todayStr(), SESSION.user.id, nowStr()]});
   }
   itemStmts.push({sql:"UPDATE customers SET balance=COALESCE(balance,0)+? WHERE id=?", args:[grandTotal - paid, custId]});
-  if(itemStmts.length) await batch(itemStmts);
+  if(itemStmts.length){ const r=await batch(itemStmts); if(!r||!r.length) return toast("Failed to save items/payment","error"); }
   // print preview stub
   const itemsHtml=cart.map(it=>`<tr><td>${esc(it.name)}</td><td>${it.qty}</td><td>${fmtMoney(it.rate)}</td><td>${fmtMoney(it.total)}</td></tr>`).join("");
   const printHtml=`<h2 style="text-align:center">Invoice ${esc(num)}</h2><p><b>Customer:</b> ${esc(VIEW_STATE.billing.cartCustomer.name)}<br><b>Date:</b> ${todayStr()}<br><b>Job:</b> ${VIEW_STATE.billing.jobId? "Job #"+VIEW_STATE.billing.jobId : "-"}</p><table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f3f4f6"><th>Item</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead><tbody>${itemsHtml}</tbody></table><div style="text-align:right;margin-top:10px"><div>Subtotal: ${fmtMoney(subtotal)}</div><div>Discount: ${fmtMoney(discount)}</div><div>Sundry: ${fmtMoney(sundry)}</div><div><b>Grand Total: ${fmtMoney(grandTotal)}</b></div><div>Paid: ${fmtMoney(paid)}</div><div>Balance: ${fmtMoney(Math.max(balance,0))}</div></div>`;
@@ -2788,14 +2808,18 @@ async function purchaseForm(id){
     if(!supId) return toast("Select supplier","err");
     const poNumber=gv("po-number")||await nextNumber("PO","purchase_orders","po_number");
     const subtotal=window._poCart.reduce((s,i)=>s+i.total,0);
+    let ok;
     if(isEdit){
-      await exec("UPDATE purchase_orders SET supplier_id=?, order_date=?, expected_date=?, po_number=?, status=?, subtotal=?, grand_total=?, notes=? WHERE id=?",[supId, gv("po-date"), gv("po-exp")||null, poNumber, gv("po-status"), subtotal, subtotal, gv("po-notes"), id]);
-      await exec("DELETE FROM purchase_order_items WHERE po_id=?",[id]);
+      ok=await exec("UPDATE purchase_orders SET supplier_id=?, order_date=?, expected_date=?, po_number=?, status=?, subtotal=?, grand_total=?, notes=? WHERE id=?",[supId, gv("po-date"), gv("po-exp")||null, poNumber, gv("po-status"), subtotal, subtotal, gv("po-notes"), id]);
+      if(!ok) return;
+      await exec("DELETE FROM purchase_order_items WHERE po_id=?",[id],true);
     } else {
-      await exec("INSERT INTO purchase_orders (po_number, supplier_id, order_date, expected_date, status, subtotal, grand_total, paid_amount, notes, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,0,?,?,?, 'pending')",[poNumber,supId,gv("po-date"),gv("po-exp")||null,gv("po-status"),subtotal,subtotal,gv("po-notes"),SESSION.user.id,nowStr()]);
+      ok=await exec("INSERT INTO purchase_orders (po_number, supplier_id, order_date, expected_date, status, subtotal, grand_total, paid_amount, notes, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,0,?,?,?, 'pending')",[poNumber,supId,gv("po-date"),gv("po-exp")||null,gv("po-status"),subtotal,subtotal,gv("po-notes"),SESSION.user.id,nowStr()]);
+      if(!ok) return;
       const newRow=await q1("SELECT id FROM purchase_orders WHERE po_number=?",[poNumber]);
       id=newRow?newRow.id:id;
     }
+    let stockFailed=false;
     for(const it of window._poCart){
       let pid=it.product_id;
       if(!pid){
@@ -2805,22 +2829,26 @@ async function purchaseForm(id){
         else {
           const code="PRD-"+Date.now().toString().slice(-6);
           const uv=uuid();
-          await exec("INSERT INTO products (uuid, code, name, category, purchase_price, selling_price, current_stock, min_stock, is_active, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,0,2,1,?,?, 'pending')",[uv,code,it.name,"other",it.rate,it.rate*1.2,0]);
+          ok=await exec("INSERT INTO products (uuid, code, name, category, purchase_price, selling_price, current_stock, min_stock, is_active, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,0,2,1,?,?, 'pending')",[uv,code,it.name,"other",it.rate,it.rate*1.2,0]);
+          if(!ok) { stockFailed=true; break; }
           const nr=await q1("SELECT id FROM products WHERE code=?",[code]);
           pid=nr?nr.id:null;
           it.product_id=pid;
         }
       }
-      await exec("INSERT INTO purchase_order_items (po_id, product_id, product_name, quantity, unit_price, total_price) VALUES (?,?,?,?,?,?)",[id, pid, it.name, it.qty, it.rate, it.total]);
+      ok=await exec("INSERT INTO purchase_order_items (po_id, product_id, product_name, quantity, unit_price, total_price) VALUES (?,?,?,?,?,?)",[id, pid, it.name, it.qty, it.rate, it.total]);
+      if(!ok) { stockFailed=true; break; }
       if(pid){
         const prod=await q1("SELECT current_stock FROM products WHERE id=?",[pid]);
         const old=prod? (prod.current_stock||0):0;
         const nowStock=old+it.qty;
-        await exec("UPDATE products SET current_stock=?, purchase_price=?, updated_at=? WHERE id=?",[nowStock,it.rate,nowStr(),pid]);
-        await exec("INSERT INTO stock_movements (product_id, movement_type, quantity, balance_before, balance_after, unit_price, total_price, reference_type, reference_id, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending')",[pid,"purchase",it.qty,old,nowStock,it.rate,it.total,"purchase_order",id,SESSION.user.id,nowStr()]);
+        ok=await exec("UPDATE products SET current_stock=?, purchase_price=?, updated_at=? WHERE id=?",[nowStock,it.rate,nowStr(),pid]);
+        if(!ok) { stockFailed=true; break; }
+        ok=await exec("INSERT INTO stock_movements (product_id, movement_type, quantity, balance_before, balance_after, unit_price, total_price, reference_type, reference_id, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending')",[pid,"purchase",it.qty,old,nowStock,it.rate,it.total,"purchase_order",id,SESSION.user.id,nowStr()]);
+        if(!ok) { stockFailed=true; break; }
       }
     }
-    // update supplier balance
+    if(stockFailed) return;
     try{ const sup=await q1("SELECT balance FROM suppliers WHERE id=?",[supId]); if(sup) await exec("UPDATE suppliers SET balance=COALESCE(balance,0)+? WHERE id=?",[subtotal,supId]); }catch(e){}
     toast("Saved - Inventory updated","ok"); closeModal(); VIEWS.billing();
   };
@@ -3618,9 +3646,12 @@ async function createDeliveryForm(){
     const num=await nextNumber("DLV","deliveries","delivery_number");
     const otp=String(Math.floor(100000+Math.random()*900000));
     const uv=uuid();
-    await exec("INSERT INTO deliveries (uuid, delivery_number, job_id, customer_id, assigned_to, delivery_address, contact_person, contact_phone, status, otp_code, otp_verified, logistics_name, lr_number, package_details, lr_copy_path, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
-      [uv,num,jobId,job.customer_id,null,gv("dl-addr"),gv("dl-person"),gv("dl-phone"),"pending",otp,0,logistics,gv("dl-lr"),gv("dl-package"),gv("dl-lrcopy"),gv("dl-notes"),SESSION.user.id,nowStr(),nowStr()]);
-    await exec("UPDATE jobs SET status='delivery', delivery_id=(SELECT id FROM deliveries WHERE delivery_number=?), updated_at=? WHERE id=?",[num, nowStr(), jobId]);
+    const r=await batch([
+      {sql:"INSERT INTO deliveries (uuid, delivery_number, job_id, customer_id, assigned_to, delivery_address, contact_person, contact_phone, status, otp_code, otp_verified, logistics_name, lr_number, package_details, lr_copy_path, notes, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')",
+        args:[uv,num,jobId,job.customer_id,null,gv("dl-addr"),gv("dl-person"),gv("dl-phone"),"pending",otp,0,logistics,gv("dl-lr"),gv("dl-package"),gv("dl-lrcopy"),gv("dl-notes"),SESSION.user.id,nowStr(),nowStr()]},
+      {sql:"UPDATE jobs SET status='delivery', delivery_id=(SELECT id FROM deliveries WHERE delivery_number=?), updated_at=? WHERE id=?",args:[num, nowStr(), jobId]}
+    ]);
+    if(!r||!r.length) return toast("Failed to create delivery","error");
     toast("Delivery created. OTP: "+otp,"ok"); closeModal(); VIEWS.delivery();
   };
 }
@@ -4358,6 +4389,7 @@ async function restoreRecycle(id){
   // For restore, we need to handle specific tables to ensure FK rewiring.
   // We'll implement for 9 tables as per spec.
   try{
+    let ok=true;
     if(table==="customers"){
       // data contains customer fields without id/uuid/created_at; we need to generate uuid if missing
       const cols=Object.keys(data).filter(k=>!["id","uuid","created_at","updated_at","sync_status"].includes(k));
@@ -4456,7 +4488,7 @@ async function restoreRecycle(id){
     } else {
       toast("Restore not implemented for "+table,"err"); return;
     }
-    await exec("DELETE FROM recycle_bin WHERE id=?",[id]);
+    await exec("DELETE FROM recycle_bin WHERE id=?",[id],true);
     toast(TABLE_LABELS[table]||table+" restored","ok"); VIEWS.recycle_bin();
   }catch(e){
     console.error(e); toast("Restore failed: "+e.message,"err");
