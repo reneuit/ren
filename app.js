@@ -824,16 +824,29 @@ async function deleteCustomer(id){
     // capture json
     const json_data = JSON.stringify(cust);
     await moveToRecycle("customers", id, cust.name, "Balance "+fmtMoney(cust.balance||0), json_data);
+    const now = nowStr();
     const r=await batch([
-      {sql:"UPDATE jobs SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE customer_contacts SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE job_parts SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id IN (SELECT id FROM jobs WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE job_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id IN (SELECT id FROM jobs WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE job_documents SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id IN (SELECT id FROM jobs WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE jobs SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
       {sql:"UPDATE leads SET customer_id=NULL WHERE customer_id=?",args:[id]},
       {sql:"UPDATE leads SET converted_customer_id=NULL WHERE converted_customer_id=?",args:[id]},
       {sql:"UPDATE orders SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE pickups SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE deliveries SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE amc_contracts SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE invoices SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE customers SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
+      {sql:"UPDATE pickups SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE deliveries SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE amc_contracts SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE amc_visits SET is_deleted=1, deleted_at=?, updated_at=? WHERE contract_id IN (SELECT id FROM amc_contracts WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE amc_complaints SET is_deleted=1, deleted_at=?, updated_at=? WHERE contract_id IN (SELECT id FROM amc_contracts WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE invoices SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE invoice_items SET is_deleted=1, deleted_at=?, updated_at=? WHERE invoice_id IN (SELECT id FROM invoices WHERE customer_id=?)",args:[now,now,id]},
+      {sql:"UPDATE payments SET is_deleted=1, deleted_at=?, updated_at=? WHERE customer_id=?",args:[now,now,id]},
+      {sql:"UPDATE transactions SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE tasks SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE inward_outward SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE master_repair_jobs SET customer_id=NULL WHERE customer_id=?",args:[id]},
+      {sql:"UPDATE customers SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[now,now,id]}
     ]);
     if(r===null||r===undefined) return toast("Delete failed","error");
     toast("Customer moved to recycle bin","ok");
@@ -897,8 +910,8 @@ async function customerForm(id){
 async function openCustomer(id){
   const c = await q1("SELECT * FROM customers WHERE id=?",[id]);
   if(!c) return;
-  const jobs = await q("SELECT job_number, brand, model, status FROM jobs WHERE customer_id=? ORDER BY created_at DESC LIMIT 20",[id]);
-  const invoices = await q("SELECT invoice_number, invoice_date, grand_total FROM invoices WHERE customer_id=? ORDER BY invoice_date DESC LIMIT 20",[id]);
+  const jobs = await q("SELECT job_number, brand, model, status FROM jobs WHERE customer_id=? AND is_deleted=0 ORDER BY created_at DESC LIMIT 20",[id]);
+  const invoices = await q("SELECT invoice_number, invoice_date, grand_total FROM invoices WHERE customer_id=? AND is_deleted=0 ORDER BY invoice_date DESC LIMIT 20",[id]);
   openModal(modalHead(c.name)+modalBody(`
     <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       <div><b>Phone</b>: ${esc(c.phone_primary||'-')}</div><div><b>Email</b>: ${esc(c.email||'-')}</div>
@@ -1080,9 +1093,10 @@ async function deleteJob(id){
       {sql:"UPDATE job_parts SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE job_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE job_documents SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
-      {sql:"UPDATE pickups SET job_id=NULL WHERE job_id=?",args:[id]},
-      {sql:"UPDATE deliveries SET job_id=NULL WHERE job_id=?",args:[id]},
-      {sql:"UPDATE invoices SET job_id=NULL WHERE job_id=?",args:[id]},
+      {sql:"UPDATE pickups SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE deliveries SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE invoices SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE invoice_items SET is_deleted=1, deleted_at=?, updated_at=? WHERE invoice_id IN (SELECT id FROM invoices WHERE job_id=?)",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE jobs SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(r===null||r===undefined) return toast("Job delete failed","error");
@@ -1276,7 +1290,7 @@ function setTaskTab(t){ VIEW_STATE.tasks.tab=t; VIEW_STATE.tasks.search=""; VIEW
 function toggleTaskSel(id){ const s=VIEW_STATE.tasks.selected; const i=s.indexOf(id); if(i>=0) s.splice(i,1); else s.push(id); navigate("tasks"); }
 function clearTaskSel(){ VIEW_STATE.tasks.selected=[]; navigate("tasks"); }
 async function renderTasksTab(){
-  const where=[],args=[];
+  const where=["is_deleted=0"],args=[];
   if(VIEW_STATE.tasks.status!=="all"){ where.push("status=?"); args.push(VIEW_STATE.tasks.status); }
   if(VIEW_STATE.tasks.type!=="all"){
     if(VIEW_STATE.tasks.type==="general") where.push("(task_type='general' OR task_type IS NULL)");
@@ -1298,7 +1312,7 @@ async function renderTasksTab(){
     }).join(""):'<div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">No tasks</div>')+'</div>';
 }
 async function renderInwardTab(){
-  const where=["(j.current_status IN ('INWARD','BACK_IN_STORE'))","(j.source_tab IS NULL OR j.source_tab != 'outward')"],args=[];
+  const where=["(j.is_deleted=0 OR j.is_deleted IS NULL)","(j.current_status IN ('INWARD','BACK_IN_STORE'))","(j.source_tab IS NULL OR j.source_tab != 'outward')"],args=[];
   if(VIEW_STATE.tasks.status!=="all"){ where.push("j.current_status=?"); args.push(VIEW_STATE.tasks.status); }
   if(VIEW_STATE.tasks.search){ where.push("(j.entry_number LIKE ? OR j.brand LIKE ? OR j.serial_number LIKE ? OR j.customer_name LIKE ?)"); const s="%"+VIEW_STATE.tasks.search+"%"; args.push(s,s,s,s); }
   const sql="SELECT j.*, s.model_name AS standby_model, s.asset_code AS standby_code FROM master_repair_jobs j LEFT JOIN standby_inventory_pool s ON s.id=j.linked_standby_id WHERE "+where.join(" AND ")+" ORDER BY j.updated_at DESC LIMIT 300";
@@ -1324,7 +1338,7 @@ async function renderInwardTab(){
     }).join(""):'<div class="empty" style="padding:30px;text-align:center;color:var(--text-muted)">No inward entries</div>')+'</div>';
 }
 async function renderOutwardTab(){
-  const where=["(j.current_status = 'AT_FACTORY' OR (j.current_status = 'BACK_IN_STORE' AND j.source_tab = 'outward'))"],args=[];
+  const where=["(j.is_deleted=0 OR j.is_deleted IS NULL)","(j.current_status = 'AT_FACTORY' OR (j.current_status = 'BACK_IN_STORE' AND j.source_tab = 'outward'))"],args=[];
   if(VIEW_STATE.tasks.status!=="all"){ where.push("j.current_status=?"); args.push(VIEW_STATE.tasks.status); }
   if(VIEW_STATE.tasks.search){ where.push("(j.entry_number LIKE ? OR j.brand LIKE ? OR j.serial_number LIKE ? OR j.customer_name LIKE ?)"); const s="%"+VIEW_STATE.tasks.search+"%"; args.push(s,s,s,s); }
   const sql="SELECT j.* FROM master_repair_jobs j WHERE "+where.join(" AND ")+" ORDER BY j.updated_at DESC LIMIT 300";
@@ -1724,7 +1738,7 @@ async function deleteLead(id){
     await moveToRecycle("leads", id, lead.name, "Source "+(lead.source||"")+" Status "+lead.status, JSON.stringify(lead));
     const r=await batch([
       {sql:"UPDATE lead_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE lead_id=?",args:[nowStr(),nowStr(),id]},
-      {sql:"UPDATE orders SET lead_id=NULL WHERE lead_id=?",args:[id]},
+      {sql:"UPDATE orders SET is_deleted=1, deleted_at=?, updated_at=? WHERE lead_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE leads SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
@@ -2171,7 +2185,7 @@ async function renderAMCComplaints(){
   const keep = el.innerHTML.slice(0, el.innerHTML.indexOf('<div style="display:flex;gap:8px')) !== -1 ? el.innerHTML.slice(0, el.innerHTML.lastIndexOf('<div style="display:flex')) : el.innerHTML.replace(spinner(),"");
   // simpler: rebuild from scratch keeping tabs
   const tabHeader = el.innerHTML.slice(0, el.innerHTML.indexOf(spinner())+spinner().length);
-  const rows=await q("SELECT comp.*, a.contract_number, c.name cname, u.full_name aname FROM amc_complaints comp LEFT JOIN amc_contracts a ON a.id=comp.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=comp.assigned_to ORDER BY comp.created_at DESC LIMIT 200");
+  const rows=await q("SELECT comp.*, a.contract_number, c.name cname, u.full_name aname FROM amc_complaints comp LEFT JOIN amc_contracts a ON a.id=comp.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=comp.assigned_to WHERE (comp.is_deleted=0 OR comp.is_deleted IS NULL) ORDER BY comp.created_at DESC LIMIT 200");
   window._amcComplaintsRows=rows;
   el.innerHTML = el.innerHTML.replace(spinner(),"")+
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div></div><div style="display:flex;gap:8px"><button class="btn primary" onclick="amcComplaintForm()">+ New Complaint</button><button class="btn" onclick="exportAMCComplaints()">Export</button></div></div>
@@ -2186,8 +2200,8 @@ function exportAMCComplaints(){
 }
 async function renderAMCHistory(){
   const el=document.getElementById("content");
-  const visits=await q("SELECT v.*, a.contract_number, c.name cname, u.full_name ename FROM amc_visits v LEFT JOIN amc_contracts a ON a.id=v.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=v.engineer_id ORDER BY v.scheduled_date DESC LIMIT 200");
-  const complaints=await q("SELECT comp.*, a.contract_number, c.name cname, u.full_name aname FROM amc_complaints comp LEFT JOIN amc_contracts a ON a.id=comp.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=comp.assigned_to ORDER BY comp.created_at DESC LIMIT 200");
+  const visits=await q("SELECT v.*, a.contract_number, c.name cname, u.full_name ename FROM amc_visits v LEFT JOIN amc_contracts a ON a.id=v.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=v.engineer_id WHERE (v.is_deleted=0 OR v.is_deleted IS NULL) ORDER BY v.scheduled_date DESC LIMIT 200");
+  const complaints=await q("SELECT comp.*, a.contract_number, c.name cname, u.full_name aname FROM amc_complaints comp LEFT JOIN amc_contracts a ON a.id=comp.contract_id LEFT JOIN customers c ON c.id=a.customer_id LEFT JOIN users u ON u.id=comp.assigned_to WHERE (comp.is_deleted=0 OR comp.is_deleted IS NULL) ORDER BY comp.created_at DESC LIMIT 200");
   window._amcHistoryVisits=visits; window._amcHistoryComplaints=complaints;
   let rowsHtml="";
   for(const v of visits){
@@ -2452,7 +2466,7 @@ async function deleteProduct(id){
   },"Delete Product");
 }
 async function showStockMovements(){
-  const rows=await q("SELECT m.*, p.name pname FROM stock_movements m LEFT JOIN products p ON p.id=m.product_id ORDER BY m.created_at DESC LIMIT 200");
+  const rows=await q("SELECT m.*, p.name pname FROM stock_movements m LEFT JOIN products p ON p.id=m.product_id WHERE (m.is_deleted=0 OR m.is_deleted IS NULL) ORDER BY m.created_at DESC LIMIT 200");
   openModal(modalHead("Stock Movement Log")+modalBody(`
     <input class="input" placeholder="Search by product name..." oninput="filterStockMov(this.value)" style="margin-bottom:8px">
     <div style="overflow:auto;max-height:50vh">
@@ -2739,7 +2753,7 @@ async function renderPurchases(){
   const el=document.getElementById("content");
   if(!VIEW_STATE.billing.purSearch) VIEW_STATE.billing.purSearch="";
   if(!VIEW_STATE.billing.purStatus) VIEW_STATE.billing.purStatus="All";
-  let where=[],args=[];
+  let where=["(po.is_deleted=0 OR po.is_deleted IS NULL)"],args=[];
   if(VIEW_STATE.billing.purStatus!=="All"){ where.push("status=?"); args.push(VIEW_STATE.billing.purStatus); }
   if(VIEW_STATE.billing.purSearch){ const like="%"+VIEW_STATE.billing.purSearch+"%"; where.push("(po_number LIKE ? OR notes LIKE ?)"); args.push(like,like); }
   const rows=await q("SELECT po.*, s.name sname FROM purchase_orders po LEFT JOIN suppliers s ON s.id=po.supplier_id "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY po.created_at DESC LIMIT 200",args);
@@ -2861,7 +2875,7 @@ async function purchaseForm(id){
 }
 async function renderGSTReports(){
   const el=document.getElementById("content");
-  const rows=await q("SELECT invoice_number, invoice_date, customer_id, subtotal, tax_total, grand_total, cgst_amount, sgst_amount, igst_amount FROM invoices WHERE invoice_type='invoice' ORDER BY invoice_date DESC LIMIT 200");
+  const rows=await q("SELECT invoice_number, invoice_date, customer_id, subtotal, tax_total, grand_total, cgst_amount, sgst_amount, igst_amount FROM invoices WHERE invoice_type='invoice' AND is_deleted=0 ORDER BY invoice_date DESC LIMIT 200");
   let slab={};
   for(const r of rows){
     const amt=r.tax_total||0;
@@ -2891,7 +2905,7 @@ async function renderSalesRegister(){
   const el=document.getElementById("content");
   if(!VIEW_STATE.billing.srSearch) VIEW_STATE.billing.srSearch="";
   if(!VIEW_STATE.billing.srStatus) VIEW_STATE.billing.srStatus="All";
-  let where=[],args=[];
+  let where=["(i.is_deleted=0 OR i.is_deleted IS NULL)"],args=[];
   if(VIEW_STATE.billing.srStatus!=="All"){ where.push("i.payment_status=?"); args.push(VIEW_STATE.billing.srStatus); }
   if(VIEW_STATE.billing.srSearch){
     const like="%"+VIEW_STATE.billing.srSearch+"%";
@@ -2949,7 +2963,7 @@ async function addInvoicePayment(invId){
   toast("Payment added","ok"); closeModal(); viewInvoice(invId);
 }
 async function renderBillingExpenses(){
-  const rows=await q("SELECT * FROM expenses ORDER BY expense_date DESC LIMIT 200");
+  const rows=await q("SELECT * FROM expenses WHERE is_deleted=0 ORDER BY expense_date DESC LIMIT 200");
   window._billingExpRows=rows;
   document.getElementById("content").innerHTML = document.getElementById("content").innerHTML.replace(spinner(),"")+
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:16px;font-weight:800">Expenses</div><button class="btn primary" onclick="expenseForm()">+ Add Expense</button></div>
@@ -3044,7 +3058,7 @@ function exportAccExpenses(){
 }
 async function renderAccountingSales(){
   const el=document.getElementById("content");
-  let where=[],args=[];
+  let where=["(i.is_deleted=0 OR i.is_deleted IS NULL)"],args=[];
   if(VIEW_STATE.accounting.srStatus!=="All"){ where.push("i.payment_status=?"); args.push(VIEW_STATE.accounting.srStatus); }
   if(VIEW_STATE.accounting.srSearch){ const like="%"+VIEW_STATE.accounting.srSearch+"%"; where.push("(i.invoice_number LIKE ? OR c.name LIKE ?)"); args.push(like,like); }
   const rows=await q("SELECT i.*, c.name cname FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY i.invoice_date DESC LIMIT 200",args);
@@ -3101,8 +3115,8 @@ async function renderAccountingLedger(){
     let rows=[];
     let running=0;
     if(VIEW_STATE.accounting.ledgerType==="Customer"){
-      const invoices=await q("SELECT invoice_date as d, invoice_number as desc_txt, grand_total, paid_amount FROM invoices WHERE customer_id=? AND invoice_date BETWEEN ? AND ? ORDER BY invoice_date",[eid,dFrom,dTo]);
-      const payments=await q("SELECT payment_date as d, receipt_number as desc_txt, amount FROM payments WHERE customer_id=? AND payment_date BETWEEN ? AND ? ORDER BY payment_date",[eid,dFrom,dTo]);
+      const invoices=await q("SELECT invoice_date as d, invoice_number as desc_txt, grand_total, paid_amount FROM invoices WHERE customer_id=? AND invoice_date BETWEEN ? AND ? AND is_deleted=0 ORDER BY invoice_date",[eid,dFrom,dTo]);
+      const payments=await q("SELECT payment_date as d, receipt_number as desc_txt, amount FROM payments WHERE customer_id=? AND payment_date BETWEEN ? AND ? AND is_deleted=0 ORDER BY payment_date",[eid,dFrom,dTo]);
       for(const inv of invoices){
         const bal=(inv.grand_total||0)-(inv.paid_amount||0);
         running+=bal;
@@ -3479,7 +3493,7 @@ VIEWS.pickup = async function(){
   if(!VIEW_STATE.pickup) VIEW_STATE.pickup={};
   if(!VIEW_STATE.pickup.search) VIEW_STATE.pickup.search="";
   if(!VIEW_STATE.pickup.status) VIEW_STATE.pickup.status="All";
-  let where=[],args=[];
+  let where=["(p.is_deleted=0 OR p.is_deleted IS NULL)"],args=[];
   if(VIEW_STATE.pickup.status!=="All"){ where.push("p.status=?"); args.push(VIEW_STATE.pickup.status); }
   if(VIEW_STATE.pickup.search){ const like="%"+VIEW_STATE.pickup.search+"%"; where.push("(p.pickup_number LIKE ? OR c.name LIKE ?)"); args.push(like,like); }
   const rows=await q("SELECT p.*, c.name cname, u.full_name aname FROM pickups p LEFT JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.assigned_to "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY p.created_at DESC LIMIT 300",args);
@@ -3587,7 +3601,7 @@ VIEWS.delivery = async function(){
   if(!VIEW_STATE.delivery) VIEW_STATE.delivery={};
   if(!VIEW_STATE.delivery.search) VIEW_STATE.delivery.search="";
   if(!VIEW_STATE.delivery.status) VIEW_STATE.delivery.status="All";
-  let where=[],args=[];
+  let where=["(d.is_deleted=0 OR d.is_deleted IS NULL)"],args=[];
   // role filter
   const role=SESSION&&SESSION.user?SESSION.user.role:"";
   const uid=SESSION&&SESSION.user?SESSION.user.id:null;
@@ -3740,7 +3754,7 @@ VIEWS.reports = async function(){
     VIEW_STATE.reports.current="sales";
     document.getElementById("export-filtered").disabled=false; document.getElementById("export-all").disabled=false;
     document.getElementById("report-title").textContent="Sales Report ("+fr+" - "+to+")";
-    const rows=await q("SELECT invoice_number, customer_id, invoice_date, grand_total, paid_amount, balance, payment_status, customer_id as cid FROM invoices WHERE invoice_date BETWEEN ? AND ? AND invoice_type='invoice' ORDER BY invoice_date",[fr,to]);
+    const rows=await q("SELECT invoice_number, customer_id, invoice_date, grand_total, paid_amount, balance, payment_status, customer_id as cid FROM invoices WHERE invoice_date BETWEEN ? AND ? AND invoice_type='invoice' AND is_deleted=0 ORDER BY invoice_date",[fr,to]);
     const enriched=[];
     for(const r of rows){
       const cust=await q1("SELECT name FROM customers WHERE id=?",[r.cid]);
@@ -3792,7 +3806,7 @@ VIEWS.reports = async function(){
     VIEW_STATE.reports.current="amc";
     document.getElementById("export-filtered").disabled=false; document.getElementById("export-all").disabled=false;
     document.getElementById("report-title").textContent="AMC Report ("+fr+" - "+to+")";
-    const contracts=await q("SELECT a.*, c.name cname FROM amc_contracts a LEFT JOIN customers c ON c.id=a.customer_id WHERE a.start_date BETWEEN ? AND ? ORDER BY a.start_date",[fr,to]);
+    const contracts=await q("SELECT a.*, c.name cname FROM amc_contracts a LEFT JOIN customers c ON c.id=a.customer_id WHERE (a.is_deleted=0 OR a.is_deleted IS NULL) AND a.start_date BETWEEN ? AND ? ORDER BY a.start_date",[fr,to]);
     const rows=contracts.map(c=>{
       const st = c.status==="active" && c.end_date >= todayStr() ? "Active" : (c.status||'').replace(/_/g," ");
       return [esc(c.contract_number), esc(c.cname||'?'), fmtD(c.start_date), fmtD(c.end_date), fmtMoney(c.contract_value||0), badge(st.toLowerCase())];
@@ -3838,8 +3852,8 @@ VIEWS.reports = async function(){
     if(type==="sales"){
       headers=["Invoice#","Customer","Date","Total","Paid","Balance","Status"];
       let rows;
-      if(universal) rows=await q("SELECT i.*, c.name cname FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id WHERE i.invoice_type='invoice' ORDER BY i.invoice_date");
-      else rows=await q("SELECT i.*, c.name cname FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id WHERE i.invoice_date BETWEEN ? AND ? AND i.invoice_type='invoice' ORDER BY i.invoice_date",[fr,to]);
+      if(universal) rows=await q("SELECT i.*, c.name cname FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id WHERE i.invoice_type='invoice' AND i.is_deleted=0 ORDER BY i.invoice_date");
+      else rows=await q("SELECT i.*, c.name cname FROM invoices i LEFT JOIN customers c ON c.id=i.customer_id WHERE i.invoice_date BETWEEN ? AND ? AND i.invoice_type='invoice' AND i.is_deleted=0 ORDER BY i.invoice_date",[fr,to]);
       data=rows.map(r=>({"Invoice#":r.invoice_number,"Customer":r.cname||"", "Date":fmtD(r.invoice_date), "Total":r.grand_total||0, "Paid":r.paid_amount||0, "Balance":r.balance||0, "Status":r.payment_status}));
       filename=universal?"sales_report_all":"sales_report_"+fr+"_"+to;
     } else if(type==="tech"){
