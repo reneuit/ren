@@ -627,12 +627,6 @@ async function moveToRecycle(source_table, source_id, item_name, item_summary, j
     return true;
   }catch(e){ console.warn("recycle insert failed",e); return false; }
 }
-async function recordCloudDeletion(table_name, record_id, record_pk){
-  try{
-    await exec("INSERT INTO deleted_records (table_name, record_id, record_pk, deleted_at, pushed) VALUES (?,?,?,?,1)",
-      [table_name, record_id, String(record_pk||record_id), nowStr()], true);
-  }catch(e){ /* best effort */ }
-}
 const ROLE_LABELS = { super_admin:"Super Admin", admin:"Admin", receptionist:"Receptionist", technician:"Technician", accounts:"Accounts", store:"Store", delivery_exec:"Delivery Exec", pickup_exec:"Pickup Exec", amc_manager:"AMC Manager", sales:"Sales", operations:"Operations" };
 const DEFAULT_PASSWORDS = { admin:"admin123", reception:"recep123", technician:"tech123", accounts:"acc123", store:"store123" };
 const FREQUENCY_MAP = { Monthly:30, Quarterly:90, "Half Yearly":180, Yearly:365 };
@@ -674,19 +668,19 @@ VIEWS.dashboard = async function(){
   const thirtyStr = thirtyDays.toISOString().slice(0,10);
   const safeCount = async (sql,args)=>{ try{ const r=await q1(sql,args); return r&&typeof r.n==="number"?r.n: (r&&r.cnt?r.cnt:0);}catch(e){return 0;} };
   const safeSum = async (sql,args)=>{ try{ const r=await q1(sql,args); return r&&typeof r.t==="number"?r.t: (r&&typeof r.s==="number"?r.s:0);}catch(e){return 0;} };
-  const openJobs = await safeCount("SELECT COUNT(*) n FROM jobs WHERE status IN ('open','assigned','diagnosis','repairing','qc','tech_accepted','waiting_approval')");
-  const todayJobs = await safeCount("SELECT COUNT(*) n FROM jobs WHERE created_at BETWEEN ? AND ?",[todayStart, todayEnd]);
-  const completedToday = await safeCount("SELECT COUNT(*) n FROM jobs WHERE completed_date BETWEEN ? AND ?",[todayStart, todayEnd]);
+  const openJobs = await safeCount("SELECT COUNT(*) n FROM jobs WHERE (is_deleted=0 OR is_deleted IS NULL) AND status IN ('open','assigned','diagnosis','repairing','qc','tech_accepted','waiting_approval')");
+  const todayJobs = await safeCount("SELECT COUNT(*) n FROM jobs WHERE (is_deleted=0 OR is_deleted IS NULL) AND created_at BETWEEN ? AND ?",[todayStart, todayEnd]);
+  const completedToday = await safeCount("SELECT COUNT(*) n FROM jobs WHERE (is_deleted=0 OR is_deleted IS NULL) AND completed_date BETWEEN ? AND ?",[todayStart, todayEnd]);
   const revenueToday = await safeSum("SELECT COALESCE(SUM(grand_total),0) t FROM invoices WHERE created_at BETWEEN ? AND ?",[todayStart, todayEnd]);
   const pendingPayments = await safeSum("SELECT COALESCE(SUM(balance),0) t FROM invoices WHERE balance > 0");
-  const totalCustomers = await safeCount("SELECT COUNT(*) n FROM customers WHERE is_active=1 OR is_active IS NULL");
-  const totalLeads = await safeCount("SELECT COUNT(*) n FROM leads");
-  const newLeads = await safeCount("SELECT COUNT(*) n FROM leads WHERE status='new'");
-  const activeAMC = await safeCount("SELECT COUNT(*) n FROM amc_contracts WHERE status='active'");
-  const amcDue = await safeCount("SELECT COUNT(*) n FROM amc_contracts WHERE status='active' AND end_date <= ? AND end_date >= ?",[thirtyStr, today]);
-  const outsourcePending = await safeCount("SELECT COUNT(*) n FROM jobs WHERE is_outsourced=1 AND status!='completed'");
+  const totalCustomers = await safeCount("SELECT COUNT(*) n FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL)");
+  const totalLeads = await safeCount("SELECT COUNT(*) n FROM leads WHERE (is_deleted=0 OR is_deleted IS NULL)");
+  const newLeads = await safeCount("SELECT COUNT(*) n FROM leads WHERE (is_deleted=0 OR is_deleted IS NULL) AND status='new'");
+  const activeAMC = await safeCount("SELECT COUNT(*) n FROM amc_contracts WHERE (is_deleted=0 OR is_deleted IS NULL) AND status='active'");
+  const amcDue = await safeCount("SELECT COUNT(*) n FROM amc_contracts WHERE (is_deleted=0 OR is_deleted IS NULL) AND status='active' AND end_date <= ? AND end_date >= ?",[thirtyStr, today]);
+  const outsourcePending = await safeCount("SELECT COUNT(*) n FROM jobs WHERE (is_deleted=0 OR is_deleted IS NULL) AND is_outsourced=1 AND status!='completed'");
   const tasksPending = await safeCount("SELECT COUNT(*) n FROM tasks WHERE status IN ('pending','in_progress')");
-  const lowStock = await safeCount("SELECT COUNT(*) n FROM products WHERE current_stock <= min_stock AND (is_active=1 OR is_active IS NULL)");
+  const lowStock = await safeCount("SELECT COUNT(*) n FROM products WHERE (is_deleted=0 OR is_deleted IS NULL) AND current_stock <= min_stock AND (is_active=1 OR is_active IS NULL)");
   const totalEmployees = await safeCount("SELECT COUNT(*) n FROM users WHERE is_active=1");
   // role filter for recent jobs / tasks
   let role = SESSION&&SESSION.user?SESSION.user.role:null;
@@ -695,10 +689,12 @@ VIEWS.dashboard = async function(){
   try{
     let sql = "SELECT j.*, c.name cname, u.full_name techname FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id LEFT JOIN users u ON u.id=j.assigned_tech ";
     let args=[];
+    let conds=["(j.is_deleted=0 OR j.is_deleted IS NULL)"];
     if(role && ["super_admin","admin","receptionist","reception"].indexOf(role)===-1){
-      sql+="WHERE j.assigned_tech=? ";
+      conds.push("j.assigned_tech=?");
       args.push(uid);
     }
+    sql+="WHERE "+conds.join(" AND ")+" ";
     sql+="ORDER BY j.created_at DESC LIMIT 10";
     recentJobs = await q(sql,args);
   }catch(e){}
@@ -783,9 +779,9 @@ VIEWS.customers = async function(){
   let rows=[];
   if(search){
     const like="%"+search+"%";
-    rows = await q("SELECT * FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (name LIKE ? OR phone_primary LIKE ? OR phone_secondary LIKE ? OR email LIKE ?) ORDER BY id DESC",[like,like,like,like]);
+    rows = await q("SELECT * FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) AND (name LIKE ? OR phone_primary LIKE ? OR phone_secondary LIKE ? OR email LIKE ?) ORDER BY id DESC",[like,like,like,like]);
   } else {
-    rows = await q("SELECT * FROM customers WHERE (is_active=1 OR is_active IS NULL) ORDER BY id DESC");
+    rows = await q("SELECT * FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY id DESC");
   }
   window._custRows = rows;
   el.innerHTML = `
@@ -837,10 +833,9 @@ async function deleteCustomer(id){
       {sql:"UPDATE deliveries SET customer_id=NULL WHERE customer_id=?",args:[id]},
       {sql:"UPDATE amc_contracts SET customer_id=NULL WHERE customer_id=?",args:[id]},
       {sql:"UPDATE invoices SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"DELETE FROM customers WHERE id=?",args:[id]}
+      {sql:"UPDATE customers SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
     if(r===null||r===undefined) return toast("Delete failed","error");
-    await recordCloudDeletion("customers", id, id);
     toast("Customer moved to recycle bin","ok");
     VIEWS.customers();
   },"Delete Customer");
@@ -930,6 +925,7 @@ VIEWS.jobs = async function(){
   const tabs = ["Open Jobs","All Jobs","Outsourced Jobs"];
   const statusOpts = ["All Status","open","assigned","diagnosis","repairing","qc","completed","cancelled","unrepairable","waiting_approval","tech_accepted","outsourced"];
   let where=[], args=[];
+  where.push("(j.is_deleted=0 OR j.is_deleted IS NULL)");
   if(tab==="Open Jobs") where.push("j.status IN ('open','assigned','tech_accepted','diagnosis','repairing','waiting_approval')");
   else if(tab==="Outsourced Jobs") where.push("j.is_outsourced=1");
   // role filter
@@ -1081,16 +1077,15 @@ async function deleteJob(id){
     const parts = await q("SELECT * FROM job_parts WHERE job_id=?",[id]);
     const acts = await q("SELECT * FROM job_activities WHERE job_id=?",[id]);
     const r=await batch([
-      {sql:"DELETE FROM job_parts WHERE job_id=?",args:[id]},
-      {sql:"DELETE FROM job_activities WHERE job_id=?",args:[id]},
-      {sql:"DELETE FROM job_documents WHERE job_id=?",args:[id]},
+      {sql:"UPDATE job_parts SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE job_activities SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE job_documents SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
       {sql:"UPDATE pickups SET job_id=NULL WHERE job_id=?",args:[id]},
       {sql:"UPDATE deliveries SET job_id=NULL WHERE job_id=?",args:[id]},
       {sql:"UPDATE invoices SET job_id=NULL WHERE job_id=?",args:[id]},
-      {sql:"DELETE FROM jobs WHERE id=?",args:[id]}
+      {sql:"UPDATE jobs SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
-    if(!r||!r.length) return toast("Delete failed","error");
-    await recordCloudDeletion("jobs", id, job.job_number);
+    if(r===null||r===undefined) return toast("Job delete failed","error");
     toast("Deleted","ok"); VIEWS.jobs();
   },"Delete Job");
 }
@@ -1130,7 +1125,7 @@ async function jobForm(prefillCustomerId, editId){
     const maybeJob = await q1("SELECT * FROM jobs WHERE id=?",[prefillCustomerId]);
     if(maybeJob) { id=prefillCustomerId; existing=maybeJob; prefillCustomerId=null; }
   }
-  const customers = await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers = await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const techs = await q("SELECT id, full_name FROM users WHERE role IN ('technician','super_admin','admin') AND (is_active=1 OR is_active IS NULL) ORDER BY full_name");
   const deviceTypes = await getDeviceTypes();
   const isEdit = !!existing;
@@ -1202,7 +1197,7 @@ async function quickAddCustomerForJob(){
   await exec("INSERT INTO customers (uuid, customer_code, name, phone_primary, balance, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,0,1,?,?,?, 'pending')",[uv, code, name, phone, SESSION.user.id, nowStr(), nowStr()]);
   toast("Customer "+name+" created","ok");
   // refresh job form dropdown
-  const customers = await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers = await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const sel=document.getElementById("jf-cust");
   if(sel){
     sel.innerHTML='<option value="">Select</option>'+customers.map(c=>`<option value="${c.id}">${esc(c.name)} - ${esc(c.phone_primary||'')}</option>`).join("");
@@ -1211,7 +1206,7 @@ async function quickAddCustomerForJob(){
   }
 }
 async function jobPartForm(id){
-  const products = await q("SELECT id, name, selling_price FROM products WHERE (is_active=1 OR is_active IS NULL) ORDER BY name");
+  const products = await q("SELECT id, name, selling_price FROM products WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   openModal(modalHead("Add Part")+modalBody(`
     <div class="field"><label>Product</label><select class="select" id="pf-prod"><option value="">Custom</option>${products.map(p=>`<option value="${p.id}" data-price="${p.selling_price||0}">${esc(p.name)} (${fmtMoney(p.selling_price||0)})</option>`).join("")}</select></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -1427,7 +1422,7 @@ async function taskSetStatus(id,status){ await exec("UPDATE tasks SET status=?, 
 async function addTaskComment(id){ const note=gv("tk-comment"); if(!note) return toast("Enter a comment","err"); const uid=SESSION.user?SESSION.user.id:null, uname=SESSION.user?(SESSION.user.full_name||SESSION.user.username):null; await exec("INSERT INTO task_activities (task_id, activity_type, note, created_by, created_at) VALUES (?,?,?,?,?)",[id,"comment",note,uid,nowStr()]); toast("Comment added","ok"); openTaskDetail(id); }
 async function taskForm(id){
   const isEdit=id!=null; const t=isEdit?await q1("SELECT * FROM tasks WHERE id=?",[id]):null;
-  const customers=await q("SELECT id, name FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const users=await q("SELECT id, full_name, username FROM users WHERE is_active=1 OR is_active IS NULL ORDER BY full_name");
   openModal(modalHead((isEdit?"Edit":"New")+" Task")+modalBody('<div class="field"><label>Title *</label><input class="input" id="tk-title" value="'+esc(t?t.title:"")+'"></div><div class="field"><label>Description</label><textarea class="textarea" id="tk-desc" rows="2">'+esc(t?t.description:"")+'</textarea></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Type</label><select class="select" id="tk-type"><option value="general"'+(t&&t.task_type==="general"?" selected":"")+'>General</option><option value="pickup"'+(t&&t.task_type==="pickup"?" selected":"")+'>Pickup</option></select></div><div class="field"><label>Priority</label><select class="select" id="tk-priority"><option value="low"'+(t&&t.priority==="low"?" selected":"")+'>Low</option><option value="medium"'+(!t||t.priority==="medium"?" selected":"")+'>Medium</option><option value="high"'+(t&&t.priority==="high"?" selected":"")+'>High</option><option value="urgent"'+(t&&t.priority==="urgent"?" selected":"")+'>Urgent</option></select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Customer</label><select class="select" id="tk-cust"><option value="">-</option>'+customers.map(c=>'<option value="'+c.id+'"'+(t&&t.customer_id==c.id?" selected":"")+">"+esc(c.name)+"</option>").join("")+'</select></div><div class="field"><label>Assignee</label><select class="select" id="tk-assignee"><option value="">-</option>'+users.map(u=>'<option value="'+u.id+'"'+(t&&t.assignee_id==u.id?" selected":"")+">"+esc(u.full_name||u.username)+"</option>").join("")+'</select></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Due Date</label><input class="input" type="datetime-local" id="tk-due" value="'+esc(t&&t.due_date?String(t.due_date).slice(0,16):"")+'"></div><div class="field"><label>Status</label><select class="select" id="tk-status"><option value="pending"'+(!t||t.status==="pending"?" selected":"")+'>Pending</option><option value="in_progress"'+(t&&t.status==="in_progress"?" selected":"")+'>In Progress</option><option value="completed"'+(t&&t.status==="completed"?" selected":"")+'>Completed</option><option value="cancelled"'+(t&&t.status==="cancelled"?" selected":"")+'>Cancelled</option></select></div></div><div id="tk-pickup-fields" style="display:'+(t&&t.task_type==="pickup"?"block":"none")+'"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Pickup Address</label><input class="input" id="tk-pickup-address" value="'+esc(t?t.pickup_address:"")+'"></div><div class="field"><label>Contact Phone</label><input class="input" id="tk-contact" value="'+esc(t?t.contact_phone:"")+'"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Device Type</label><input class="input" id="tk-device" value="'+esc(t?t.device_type:"")+'"></div><div class="field"><label>Scheduled Date</label><input class="input" type="datetime-local" id="tk-scheduled" value="'+esc(t&&t.scheduled_date?String(t.scheduled_date).slice(0,16):"")+'"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Delivery Address</label><input class="input" id="tk-delivery-address" value="'+esc(t?t.delivery_address:"")+'"></div><div class="field"><label>Delivery Contact</label><input class="input" id="tk-delivery-contact" value="'+esc(t?t.delivery_contact:"")+'"></div></div><div class="field"><label><input type="checkbox" id="tk-onsite" '+(t&&t.is_onsite_repair==1?"checked":"")+'> Onsite Repair</label></div></div>')+modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="tk-save">'+(isEdit?"Update":"Create")+'</button>'));
   document.getElementById("tk-type").onchange=e=>{ document.getElementById("tk-pickup-fields").style.display=e.target.value==="pickup"?"block":"none"; };
@@ -1448,7 +1443,7 @@ async function taskForm(id){
   };
 }
 async function taskInwardForm(){
-  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const standbys=await q("SELECT id, asset_code, model_name, serial_number FROM standby_inventory_pool WHERE status='AVAILABLE' ORDER BY asset_code");
   openModal(modalHead("\uD83D\uDCE5 New Inward")+modalBody('<div class="field"><label class="req">Customer</label><select class="select" id="ti-cust"><option value="">Select</option>'+customers.map(c=>'<option value="'+c.id+'">'+esc(c.name)+' - '+esc(c.phone_primary||"")+'</option>').join("")+'</select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Brand</label><input class="input" id="ti-brand"></div><div class="field"><label>Model</label><input class="input" id="ti-model"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Serial</label><input class="input" id="ti-serial"></div><div class="field"><label>Device Type</label><input class="input" id="ti-type" value="Laptop"></div></div><div class="field"><label>Complaint</label><textarea class="textarea" id="ti-complaint"></textarea></div>'+(standbys.length?'<div class="field"><label>Allocate Standby (optional)</label><select class="select" id="ti-standby"><option value="">None</option>'+standbys.map(s=>'<option value="'+s.id+'">'+esc(s.asset_code+" - "+s.model_name+" ("+s.serial_number+")")+'</option>').join("")+'</select></div>':""))+modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="ti-save">Create</button>'));
   document.getElementById("ti-save").onclick=async()=>{
@@ -1464,7 +1459,7 @@ async function taskInwardForm(){
   };
 }
 async function newOutwardForm(){
-  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   openModal(modalHead("\u27A1\uFE0F New Outward")+modalBody('<div class="field"><label class="req">Customer</label><select class="select" id="no-cust"><option value="">Select</option>'+customers.map(c=>'<option value="'+c.id+'">'+esc(c.name)+' - '+esc(c.phone_primary||"")+'</option>').join("")+'</select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Brand</label><input class="input" id="no-brand"></div><div class="field"><label>Model</label><input class="input" id="no-model"></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label>Serial</label><input class="input" id="no-serial"></div><div class="field"><label>Device Type</label><input class="input" id="no-type" value="Laptop"></div></div><div class="field"><label>Complaint</label><textarea class="textarea" id="no-complaint"></textarea></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="field"><label class="req">Factory/Service Center</label><input class="input" id="no-factory" placeholder="e.g. Dell Service"></div><div class="field"><label>Contact</label><input class="input" id="no-contact"></div></div><div class="field"><label>Courier Tracking</label><input class="input" id="no-courier"></div><div class="field"><label>Outward Notes</label><textarea class="textarea" id="no-notes"></textarea></div>')+modalActions('<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="no-save">Create</button>'));
   document.getElementById("no-save").onclick=async()=>{
     const custId=gv("no-cust"), factory=gv("no-factory");
@@ -1561,6 +1556,7 @@ VIEWS.leads = async function(){
   if(!VIEW_STATE.leads.status) VIEW_STATE.leads.status="all";
   if(!VIEW_STATE.leads.search) VIEW_STATE.leads.search="";
   const where=[],args=[];
+  where.push("(l.is_deleted=0 OR l.is_deleted IS NULL)");
   if(VIEW_STATE.leads.status!=="all"){
     if(VIEW_STATE.leads.status==="converted") where.push("converted_to_customer=1");
     else if(VIEW_STATE.leads.status==="won") where.push("status='won'");
@@ -1727,12 +1723,11 @@ async function deleteLead(id){
     const lead=await q1("SELECT * FROM leads WHERE id=?",[id]); if(!lead) return;
     await moveToRecycle("leads", id, lead.name, "Source "+(lead.source||"")+" Status "+lead.status, JSON.stringify(lead));
     const r=await batch([
-      {sql:"DELETE FROM lead_activities WHERE lead_id=?",args:[id]},
+      {sql:"UPDATE lead_activities SET is_deleted=1, deleted_at=? WHERE lead_id=?",args:[nowStr(),id]},
       {sql:"UPDATE orders SET lead_id=NULL WHERE lead_id=?",args:[id]},
-      {sql:"DELETE FROM leads WHERE id=?",args:[id]}
+      {sql:"UPDATE leads SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
-    await recordCloudDeletion("leads", id, lead.name);
     toast("Deleted","ok"); VIEWS.leads();
   },"Delete Lead");
 }
@@ -1747,6 +1742,7 @@ VIEWS.orders = async function(){
   if(!VIEW_STATE.orders.priority) VIEW_STATE.orders.priority="All Priority";
   if(!VIEW_STATE.orders.source) VIEW_STATE.orders.source="All Source";
   let where=[],args=[];
+  where.push("(is_deleted=0 OR is_deleted IS NULL)");
   if(VIEW_STATE.orders.status!=="All"){ where.push("status=?"); args.push(VIEW_STATE.orders.status); }
   if(VIEW_STATE.orders.priority!=="All Priority"){ where.push("priority=?"); args.push(VIEW_STATE.orders.priority); }
   if(VIEW_STATE.orders.source!=="All Source"){ where.push("source=?"); args.push(VIEW_STATE.orders.source); }
@@ -1791,7 +1787,7 @@ async function orderForm(id, preselectCustomerId){
   const isEdit=!!id;
   const o=isEdit?await q1("SELECT * FROM orders WHERE id=?",[id]):{};
   if(isEdit && !o) return;
-  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const users=await q("SELECT id, full_name FROM users WHERE is_active=1 OR is_active IS NULL ORDER BY full_name");
   const deviceTypes=await getDeviceTypes();
   let specs={};
@@ -1914,11 +1910,10 @@ async function deleteOrder(id){
     const o=await q1("SELECT * FROM orders WHERE id=?",[id]); if(!o) return;
     await moveToRecycle("orders", id, o.order_number, "Customer "+o.customer_name, JSON.stringify(o));
     const r=await batch([
-      {sql:"DELETE FROM order_activities WHERE order_id=?",args:[id]},
-      {sql:"DELETE FROM orders WHERE id=?",args:[id]}
+      {sql:"UPDATE order_activities SET is_deleted=1, deleted_at=? WHERE order_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE orders SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
-    await recordCloudDeletion("orders", id, o.order_number);
     toast("Deleted","ok"); VIEWS.orders();
   },"Delete Order");
 }
@@ -1953,7 +1948,7 @@ async function renderOutsourceDashboard(){
   const completed = (await q1("SELECT COUNT(*) n FROM jobs WHERE is_outsourced=1 AND outsource_received_date IS NOT NULL"))?.n||0;
   const todayStrVal = todayStr();
   const overdue = (await q1("SELECT COUNT(*) n FROM jobs WHERE is_outsourced=1 AND outsource_received_date IS NULL AND outsource_expected_return < ?",[todayStrVal]))?.n||0;
-  const vendors=await q("SELECT * FROM outsource_vendors ORDER BY name");
+  const vendors=await q("SELECT * FROM outsource_vendors WHERE (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   let detailRows="";
   for(const v of vendors){
     const total=(await q1("SELECT COUNT(*) n FROM jobs WHERE outsource_vendor_id=? AND is_outsourced=1",[v.id]))?.n||0;
@@ -1985,7 +1980,7 @@ function exportOutsourceDashboard(){
 async function renderOutsourceJobs(){
   const el=document.getElementById("content");
   const base = el.innerHTML.slice(0, el.innerHTML.indexOf(spinner())+spinner().length);
-  let where=["j.is_outsourced=1"], args=[];
+  let where=["j.is_outsourced=1","(j.is_deleted=0 OR j.is_deleted IS NULL)"], args=[];
   if(VIEW_STATE.outsource.status==="outsourced"){ where.push("j.outsource_received_date IS NULL"); }
   else if(VIEW_STATE.outsource.status==="received"){ where.push("j.outsource_received_date IS NOT NULL"); where.push("j.status!='completed'"); }
   else if(VIEW_STATE.outsource.status==="completed"){ where.push("j.status='completed'"); }
@@ -2027,7 +2022,7 @@ function exportOutsourceJobs(){
 }
 async function renderOutsourceVendors(){
   const el=document.getElementById("content");
-  const rows=await q("SELECT * FROM outsource_vendors "+(VIEW_STATE.outsource.vsearch? "WHERE name LIKE ? OR mobile LIKE ?":"")+" ORDER BY name", VIEW_STATE.outsource.vsearch? ["%"+VIEW_STATE.outsource.vsearch+"%","%"+VIEW_STATE.outsource.vsearch+"%"] : []);
+  const rows=await q("SELECT * FROM outsource_vendors WHERE (is_deleted=0 OR is_deleted IS NULL) "+(VIEW_STATE.outsource.vsearch? "AND (name LIKE ? OR mobile LIKE ?)":"")+" ORDER BY name", VIEW_STATE.outsource.vsearch? ["%"+VIEW_STATE.outsource.vsearch+"%","%"+VIEW_STATE.outsource.vsearch+"%"] : []);
   window._outVendorsRows=rows;
   el.innerHTML = el.innerHTML.replace(spinner(),"")+
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -2072,13 +2067,13 @@ async function vendorForm(id){
 }
 async function deleteVendor(id){
   confirmBox("Delete this vendor? Any jobs linked to this vendor will keep their history.", async ()=>{
-    await exec("DELETE FROM outsource_vendors WHERE id=?",[id]);
+    await exec("UPDATE outsource_vendors SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
     toast("Deleted","ok"); VIEWS.outsource();
   },"Delete Vendor");
 }
 async function markOutsourcedForm(preselectedJobId){
-  const jobs=await q("SELECT j.id, j.job_number, c.name cname, j.device_type FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id WHERE j.is_outsourced=0 AND j.status IN ('diagnosis','repairing','unrepairable','tech_accepted','assigned') ORDER BY j.created_at DESC LIMIT 100");
-  const vendors=await q("SELECT id, name FROM outsource_vendors ORDER BY name");
+  const jobs=await q("SELECT j.id, j.job_number, c.name cname, j.device_type FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id WHERE (j.is_deleted=0 OR j.is_deleted IS NULL) AND j.is_outsourced=0 AND j.status IN ('diagnosis','repairing','unrepairable','tech_accepted','assigned') ORDER BY j.created_at DESC LIMIT 100");
+  const vendors=await q("SELECT id, name FROM outsource_vendors WHERE (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   if(!jobs.length) return toast("No eligible jobs","err");
   openModal(modalHead("Mark Job as Outsourced")+modalBody(`
     <div class="field"><label class="req">Job *</label><select class="select" id="mo-job" ${preselectedJobId?"disabled":""}><option value="">Select Job</option>${jobs.map(j=>`<option value="${j.id}" ${preselectedJobId==j.id?"selected":""}>${esc(j.job_number)} - ${esc(j.cname||'?')} (${esc(j.device_type||'')})</option>`).join("")}</select></div>
@@ -2145,6 +2140,7 @@ async function renderAMCContracts(){
   const el=document.getElementById("content");
   const keep = el.innerHTML.replace(spinner(),"");
   let where=[],args=[];
+  where.push("(a.is_deleted=0 OR a.is_deleted IS NULL)");
   if(VIEW_STATE.amc.status==="active"){ where.push("a.status='active'"); where.push("a.end_date >= ?"); args.push(todayStr()); }
   else if(VIEW_STATE.amc.status==="expired"){ where.push("a.end_date < ?"); args.push(todayStr()); }
   else if(VIEW_STATE.amc.status!=="All"){ where.push("a.status=?"); args.push(VIEW_STATE.amc.status); }
@@ -2221,7 +2217,7 @@ async function viewAMC(id){
 async function amcForm(id, viewOnly){
   const isEdit=!!id;
   const r=isEdit?await q1("SELECT * FROM amc_contracts WHERE id=?",[id]):{};
-  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const users=await q("SELECT id, full_name FROM users WHERE is_active=1 OR is_active IS NULL ORDER BY full_name");
   const title = viewOnly? "View Contract" : (isEdit?"Edit Contract":"New AMC Contract");
   openModal(modalHead(title)+modalBody(`
@@ -2267,7 +2263,7 @@ async function quickAddCustomerForAMC(){
   const uv=uuid();
   await exec("INSERT INTO customers (uuid, customer_code, name, phone_primary, balance, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,0,1,?,?,?, 'pending')",[uv,code,name,phone,SESSION.user.id,nowStr(),nowStr()]);
   toast("Customer created","ok");
-  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const sel=document.getElementById("amc-cust");
   if(sel){ sel.innerHTML='<option value="">Select Customer</option>'+customers.map(c=>`<option value="${c.id}">${esc(c.name)} (${esc(c.phone_primary||'N/A')})</option>`).join(""); const latest=customers.find(c=>c.name===name); if(latest) sel.value=latest.id; }
 }
@@ -2302,12 +2298,11 @@ async function deleteAMC(id){
     const complaints=await q("SELECT * FROM amc_complaints WHERE contract_id=?",[id]);
     await moveToRecycle("amc_contracts", id, contract.contract_number, "Customer "+contract.customer_id, JSON.stringify({contract, visits, complaints}));
     const r=await batch([
-      {sql:"DELETE FROM amc_visits WHERE contract_id=?",args:[id]},
-      {sql:"DELETE FROM amc_complaints WHERE contract_id=?",args:[id]},
-      {sql:"DELETE FROM amc_contracts WHERE id=?",args:[id]}
+      {sql:"UPDATE amc_visits SET is_deleted=1, deleted_at=? WHERE contract_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE amc_complaints SET is_deleted=1, deleted_at=? WHERE contract_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE amc_contracts SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
-    await recordCloudDeletion("amc_contracts", id, contract.contract_number);
     toast("Deleted","ok"); VIEWS.amc();
   },"Delete Contract");
 }
@@ -2353,7 +2348,7 @@ VIEWS.inventory = async function(){
   if(VIEW_STATE.inventory.search===undefined) VIEW_STATE.inventory.search="";
   if(!VIEW_STATE.inventory.cat) VIEW_STATE.inventory.cat="All";
   const cats=["All","laptop","desktop","printer","cctv","networking","monitor","ups","scanner","tablet","mobile","gaming","parts","consumables","other"];
-  let where=["(p.is_active=1 OR p.is_active IS NULL)"], args=[];
+  let where=["(p.is_active=1 OR p.is_active IS NULL)","(p.is_deleted=0 OR p.is_deleted IS NULL)"], args=[];
   if(VIEW_STATE.inventory.cat!=="All"){ where.push("p.category=?"); args.push(VIEW_STATE.inventory.cat); }
   if(VIEW_STATE.inventory.search){
     const like="%"+VIEW_STATE.inventory.search+"%";
@@ -2447,13 +2442,12 @@ async function deleteProduct(id){
     await moveToRecycle("products", id, prod.name, "Code "+(prod.code||''), JSON.stringify(prod));
     const r=await batch([
       {sql:"UPDATE job_parts SET product_id=NULL WHERE product_id=?",args:[id]},
-      {sql:"DELETE FROM stock_movements WHERE product_id=?",args:[id]},
+      {sql:"UPDATE stock_movements SET is_deleted=1, deleted_at=? WHERE product_id=?",args:[nowStr(),id]},
       {sql:"UPDATE purchase_order_items SET product_id=NULL WHERE product_id=?",args:[id]},
       {sql:"UPDATE invoice_items SET product_id=NULL WHERE product_id=?",args:[id]},
-      {sql:"DELETE FROM products WHERE id=?",args:[id]}
+      {sql:"UPDATE products SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
-    await recordCloudDeletion("products", id, prod.code);
     toast("Deleted","ok"); VIEWS.inventory();
   },"Delete Product");
 }
@@ -2574,7 +2568,7 @@ let _posSelectedProduct=null;
 async function posCustSearch(term){
   const sugg=document.getElementById("pos-cust-sugg");
   if(!term.trim()){ sugg.style.display="none"; return; }
-  const rows=await q("SELECT id, name, phone_primary, balance FROM customers WHERE is_active=1 OR is_active IS NULL AND name LIKE ? ORDER BY name LIMIT 10",["%"+term+"%"]);
+  const rows=await q("SELECT id, name, phone_primary, balance FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) AND name LIKE ? ORDER BY name LIMIT 10",["%"+term+"%"]);
   if(!rows.length){ sugg.style.display="none"; return; }
   sugg.innerHTML=rows.map(c=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSCust(${c.id})">${esc(c.name)} | ${esc(c.phone_primary||'')} | Bal: ${fmtMoney(c.balance||0)}</div>`).join("");
   sugg.style.display="block";
@@ -2613,7 +2607,7 @@ async function pickPOSJob(jobNumber){
 async function posItemSearch(term){
   const sugg=document.getElementById("pos-item-sugg");
   if(!term.trim()){ sugg.style.display="none"; return; }
-  const rows=await q("SELECT id, name, current_stock, selling_price FROM products WHERE is_active=1 AND name LIKE ? ORDER BY name LIMIT 10",["%"+term+"%"]);
+  const rows=await q("SELECT id, name, current_stock, selling_price FROM products WHERE is_active=1 AND (is_deleted=0 OR is_deleted IS NULL) AND name LIKE ? ORDER BY name LIMIT 10",["%"+term+"%"]);
   if(!rows.length){ sugg.style.display="none"; return; }
   sugg.innerHTML=rows.map((p,idx)=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSItem(${p.id})">${esc(p.name)} | Stock: ${p.current_stock||0} | ${fmtMoney(p.selling_price||0)}</div>`).join("");
   sugg.style.display="block";
@@ -2673,7 +2667,7 @@ async function quickPOSAddItem(){
   if(prod){ _posSelectedProduct=prod; gv("pos-item", name); gv("pos-rate", String(price)); toast("Item created","ok"); renderPOS(); }
 }
 async function browsePOSProducts(){
-  const rows=await q("SELECT id, name, selling_price, current_stock FROM products WHERE is_active=1 ORDER BY name LIMIT 50");
+  const rows=await q("SELECT id, name, selling_price, current_stock FROM products WHERE is_active=1 AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name LIMIT 50");
   let html='<input class="input" placeholder="Search..." oninput="filterPOSBrowse(this.value)" style="margin-bottom:8px"><div id="pos-browse-list" style="max-height:50vh;overflow:auto">';
   html+=rows.map((p,idx)=>`<div class="pos-browse-item" data-name="${esc(p.name.toLowerCase())}" style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee;cursor:pointer" onclick="pickPOSItem(${p.id});closeModal()"><span>${esc(p.name)} (Stock:${p.current_stock||0})</span><span>${fmtMoney(p.selling_price||0)}</span></div>`).join("")+'</div>';
   openModal(modalHead("Browse Products")+modalBody(html)+modalActions('<button class="btn primary" onclick="closeModal()">Close</button>'),"lg");
@@ -2824,7 +2818,7 @@ async function purchaseForm(id){
     if(isEdit){
       ok=await exec("UPDATE purchase_orders SET supplier_id=?, order_date=?, expected_date=?, po_number=?, status=?, subtotal=?, grand_total=?, notes=? WHERE id=?",[supId, gv("po-date"), gv("po-exp")||null, poNumber, gv("po-status"), subtotal, subtotal, gv("po-notes"), id]);
       if(!ok) return;
-      await exec("DELETE FROM purchase_order_items WHERE po_id=?",[id],true);
+      await exec("UPDATE purchase_order_items SET is_deleted=1, deleted_at=? WHERE po_id=?",[nowStr(),id],true);
     } else {
       ok=await exec("INSERT INTO purchase_orders (po_number, supplier_id, order_date, expected_date, status, subtotal, grand_total, paid_amount, notes, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,0,?,?,?, 'pending')",[poNumber,supId,gv("po-date"),gv("po-exp")||null,gv("po-status"),subtotal,subtotal,gv("po-notes"),SESSION.user.id,nowStr()]);
       if(!ok) return;
@@ -3011,6 +3005,7 @@ VIEWS.accounting = async function(){
 async function renderAccountingTransactions(){
   const el=document.getElementById("content");
   let where=[],args=[];
+  where.push("(is_deleted=0 OR is_deleted IS NULL)");
   if(VIEW_STATE.accounting.txnType!=="All"){ where.push("transaction_type=?"); args.push(VIEW_STATE.accounting.txnType); }
   if(VIEW_STATE.accounting.txnSearch){ const like="%"+VIEW_STATE.accounting.txnSearch+"%"; where.push("(description LIKE ? OR category LIKE ?)"); args.push(like,like); }
   const rows=await q("SELECT * FROM transactions "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY transaction_date DESC LIMIT 200",args);
@@ -3030,6 +3025,7 @@ function exportAccTxns(){
 async function renderAccountingExpenses(){
   const el=document.getElementById("content");
   let where=[],args=[];
+  where.push("(is_deleted=0 OR is_deleted IS NULL)");
   if(VIEW_STATE.accounting.expCat!=="All"){ where.push("category=?"); args.push(VIEW_STATE.accounting.expCat); }
   if(VIEW_STATE.accounting.expSearch){ const like="%"+VIEW_STATE.accounting.expSearch+"%"; where.push("(description LIKE ? OR category LIKE ?)"); args.push(like,like); }
   const rows=await q("SELECT * FROM expenses "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY expense_date DESC LIMIT 200",args);
@@ -3074,7 +3070,7 @@ function exportAccSales(){
 async function renderAccountingLedger(){
   const el=document.getElementById("content");
   // need entity lists
-  const custs=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const custs=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const sups=await q("SELECT id, name, phone FROM suppliers ORDER BY name");
   // preserve ledger state
   if(!VIEW_STATE.accounting.ledgerFrom) VIEW_STATE.accounting.ledgerFrom = new Date(Date.now()-90*86400000).toISOString().slice(0,10);
@@ -3191,8 +3187,7 @@ async function deleteTransaction(id){
   confirmBox("Delete this transaction? It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const t=await q1("SELECT * FROM transactions WHERE id=?",[id]); if(!t) return;
     await moveToRecycle("transactions", id, t.description||"", "Amount "+fmtMoney(t.amount), JSON.stringify(t));
-    await exec("DELETE FROM transactions WHERE id=?",[id]);
-    await recordCloudDeletion("transactions", id, id);
+    await exec("UPDATE transactions SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Transaction");
 }
@@ -3225,8 +3220,7 @@ async function deleteExpense(id){
   confirmBox("Delete this expense? It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const e=await q1("SELECT * FROM expenses WHERE id=?",[id]); if(!e) return;
     await moveToRecycle("expenses", id, e.description||"", "Amount "+fmtMoney(e.amount), JSON.stringify(e));
-    await exec("DELETE FROM expenses WHERE id=?",[id]);
-    await recordCloudDeletion("expenses", id, id);
+    await exec("UPDATE expenses SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Expense");
 }
@@ -3523,7 +3517,7 @@ async function quickDeliverPickup(id){
 async function pickupForm(id){
   const isEdit=!!id;
   const p=isEdit?await q1("SELECT * FROM pickups WHERE id=?",[id]):{};
-  const customers=await q("SELECT id, name, phone_primary, address FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+  const customers=await q("SELECT id, name, phone_primary, address FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
   const users=await q("SELECT id, full_name FROM users WHERE is_active=1 OR is_active IS NULL ORDER BY full_name");
   openModal(modalHead(isEdit?"Edit Pickup":"New Pickup")+modalBody(`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -3555,7 +3549,7 @@ async function pickupForm(id){
     const code=await nextNumber("CUS","customers","customer_code");
     const uv=uuid();
     await exec("INSERT INTO customers (uuid, customer_code, name, phone_primary, balance, is_active, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,0,1,?,?,?, 'pending')",[uv,code,name,phone,SESSION.user.id,nowStr(),nowStr()]);
-    const custs=await q("SELECT id, name, phone_primary FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+    const custs=await q("SELECT id, name, phone_primary FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
     const sel=document.getElementById("pk-cust");
     sel.innerHTML='<option value="">Select Customer</option>'+custs.map(c=>`<option value="${c.id}">${esc(c.name)} (${esc(c.phone_primary||'N/A')})</option>`).join("");
     const latest=custs.find(c=>c.name===name);
@@ -3627,7 +3621,7 @@ function exportDeliveries(){
   exportToCSV(headers,data,"deliveries");
 }
 async function createDeliveryForm(){
-  const jobs=await q("SELECT j.id, j.job_number, c.name cname, j.device_type, j.brand, j.model FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id WHERE j.status IN ('completed','delivery','qc') ORDER BY j.created_at DESC LIMIT 50");
+  const jobs=await q("SELECT j.id, j.job_number, c.name cname, j.device_type, j.brand, j.model FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id WHERE (j.is_deleted=0 OR j.is_deleted IS NULL) AND j.status IN ('completed','delivery','qc') ORDER BY j.created_at DESC LIMIT 50");
   openModal(modalHead("Create Delivery")+modalBody(`
     <div class="field"><label class="req">Job *</label><select class="select" id="dl-job"><option value="">Select Job</option>${jobs.map(j=>`<option value="${j.id}">${esc(j.job_number)} - ${esc(j.cname||'?')} (${esc(j.device_type||'')})</option>`).join("")}</select></div>
     <div class="field"><label>Delivery Address</label><textarea class="textarea" id="dl-addr"></textarea></div>
@@ -3781,7 +3775,7 @@ VIEWS.reports = async function(){
     VIEW_STATE.reports.current="customer";
     document.getElementById("export-filtered").disabled=false; document.getElementById("export-all").disabled=false;
     document.getElementById("report-title").textContent="Customer Report ("+fr+" - "+to+")";
-    const customers=await q("SELECT id, name, phone_primary, balance FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+    const customers=await q("SELECT id, name, phone_primary, balance FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
     const rows=[];
     for(const c of customers){
       const tcount=(await q1("SELECT COUNT(*) n FROM jobs WHERE customer_id=? AND created_at BETWEEN ? AND ?",[c.id, fr+" 00:00:00", to+" 23:59:59"]))?.n||0;
@@ -3823,8 +3817,7 @@ VIEWS.reports = async function(){
     VIEW_STATE.reports.current="inventory";
     document.getElementById("export-filtered").disabled=false; document.getElementById("export-all").disabled=false;
     document.getElementById("report-title").textContent="Inventory Report (as of "+to+")";
-    const products=await q("SELECT code, name, category, current_stock, min_stock, selling_price FROM products WHERE is_active=1 OR is_active IS NULL ORDER BY name");
-    const rows=products.map(p=>[esc(p.code||'-'), esc(p.name), esc(p.category||'-'), String(p.current_stock||0), String(p.min_stock||0), fmtMoney(p.selling_price||0), (p.current_stock||0) <= (p.min_stock||0) ? "Low" : "OK"]);
+    const products=await q("SELECT code, name, category, current_stock, min_stock, selling_price FROM products WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");    const rows=products.map(p=>[esc(p.code||'-'), esc(p.name), esc(p.category||'-'), String(p.current_stock||0), String(p.min_stock||0), fmtMoney(p.selling_price||0), (p.current_stock||0) <= (p.min_stock||0) ? "Low" : "OK"]);
     const headers=["Code","Name","Category","Stock","Min Stock","Price","Status"];
     window._reportData={headers, rows:rows.map(r=>({headers, row:r})), type:"inventory", fr, to};
     window._reportType="inventory";
@@ -3861,7 +3854,7 @@ VIEWS.reports = async function(){
       filename=universal?"tech_report_all":"tech_report_"+fr+"_"+to;
     } else if(type==="customer"){
       headers=["Customer","Phone","Jobs","Invoices","Total Spent","Balance"];
-      const customers=await q("SELECT id, name, phone_primary, balance FROM customers WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+      const customers=await q("SELECT id, name, phone_primary, balance FROM customers WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
       for(const c of customers){
         let tcount, invoices;
         if(universal){ tcount=(await q1("SELECT COUNT(*) n FROM jobs WHERE customer_id=?",[c.id]))?.n||0; invoices=await q("SELECT grand_total FROM invoices WHERE customer_id=?",[c.id]); }
@@ -3886,7 +3879,7 @@ VIEWS.reports = async function(){
       filename=universal?"lead_report_all":"lead_report_"+fr+"_"+to;
     } else if(type==="inventory"){
       headers=["Code","Name","Category","Stock","Min Stock","Price","Status"];
-      const rows=await q("SELECT code, name, category, current_stock, min_stock, selling_price FROM products WHERE is_active=1 OR is_active IS NULL ORDER BY name");
+      const rows=await q("SELECT code, name, category, current_stock, min_stock, selling_price FROM products WHERE (is_active=1 OR is_active IS NULL) AND (is_deleted=0 OR is_deleted IS NULL) ORDER BY name");
       data=rows.map(r=>({"Code":r.code||"", "Name":r.name, "Category":r.category||"", "Stock":r.current_stock||0, "Min Stock":r.min_stock||0, "Price":r.selling_price||0, "Status":(r.current_stock||0)<= (r.min_stock||0)?"Low":"OK"}));
       filename="inventory_report_all";
     }
@@ -4259,7 +4252,7 @@ async function deviceTypeForm(id){
 }
 async function deleteDeviceType(id){
   confirmBox("Delete this device type?", async ()=>{
-    await exec("DELETE FROM device_type_options WHERE id=?",[id]);
+    await exec("UPDATE device_type_options SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
     toast("Deleted","ok"); _deviceTypesCache=null; _deviceTypesLoaded=false; VIEWS.settings();
   },"Delete Device Type");
 }
@@ -4391,34 +4384,46 @@ async function restoreRecycle(id){
   let data={};
   try{ data=JSON.parse(rb.json_data||"{}"); }catch(e){ data={}; }
   const table=rb.source_table, sid=rb.source_id;
+  try{
+    // soft-delete restore: check if the row still exists with is_deleted=1
+    const existing = await q1("SELECT id FROM "+table+" WHERE id=? AND is_deleted=1",[sid]);
+    if(existing){
+      // un-delete the main record
+      await exec("UPDATE "+table+" SET is_deleted=0, deleted_at=NULL WHERE id=?",[sid]);
+      // un-delete children that were also soft-deleted
+      const childMap = {
+        jobs:         [{fk:"job_id", table:"job_parts"},{fk:"job_id", table:"job_activities"},{fk:"job_id", table:"job_documents"}],
+        customers:    [],
+        leads:        [{fk:"lead_id", table:"lead_activities"}],
+        orders:       [{fk:"order_id", table:"order_activities"}],
+        amc_contracts:[{fk:"contract_id", table:"amc_visits"},{fk:"contract_id", table:"amc_complaints"}],
+        products:     [{fk:"product_id", table:"stock_movements"}]
+      };
+      for(const ch of (childMap[table]||[])){
+        await exec("UPDATE "+ch.table+" SET is_deleted=0, deleted_at=NULL WHERE "+ch.fk+"=? AND is_deleted=1",[sid]);
+      }
+      await exec("DELETE FROM recycle_bin WHERE id=?",[id],true);
+      toast((TABLE_LABELS[table]||table)+" restored","ok"); VIEWS.recycle_bin(); return;
+    }
+  }catch(e){ console.warn("soft-restore check failed",e); }
+  // fallback: record was physically deleted or not found — attempt re-insert from json snapshot
   const children=data._children||null;
-  // remove meta
   delete data._children; delete data._linked_orders; delete data._job_children;
-  // check conflict
   const exists=await q1("SELECT id FROM "+table+" WHERE id=?",[sid]);
   if(exists){ toast("This item already exists. Removing recycle entry.","err"); await exec("DELETE FROM recycle_bin WHERE id=?",[id]); VIEWS.recycle_bin(); return; }
-  // prepare insert
-  // For each table, we need to map columns; simplest: insert with json_data fields that exist in table (we filtered earlier via moveToRecycle)
-  // We'll attempt generic insert by building column list from data keys that are not id/uuid/created_at etc filtered already at move time.
-  // For restore, we need to handle specific tables to ensure FK rewiring.
-  // We'll implement for 9 tables as per spec.
   try{
     let ok=true;
     if(table==="customers"){
-      // data contains customer fields without id/uuid/created_at; we need to generate uuid if missing
       const cols=Object.keys(data).filter(k=>!["id","uuid","created_at","updated_at","sync_status"].includes(k));
       const vals=cols.map(k=>data[k]);
-      const placeholders=cols.map(()=>"?,").join("").slice(0,-1);
       const uuidVal = data.uuid||uuid();
       cols.unshift("uuid"); vals.unshift(uuidVal);
-      // ensure customer_code unique
       const colStr=cols.join(",");
       const phStr=cols.map(()=>"?").join(",");
       await exec("INSERT INTO customers ("+colStr+", created_at, updated_at, sync_status) VALUES ("+phStr+",?,?, 'pending')", [...vals, nowStr(), nowStr()]);
       const newRow=await q1("SELECT id FROM customers WHERE uuid=?",[uuidVal]);
       const newId=newRow?newRow.id:sid;
       if(children){
-        // children may include customer_contacts, jobs with _job_children
         if(children.customer_contacts) for(const c of children.customer_contacts){ const cc=Object.assign({},c); cc.customer_id=newId; const ccCols=Object.keys(cc).filter(k=>!["id","uuid"].includes(k)); const ccVals=Object.values(cc); await exec("INSERT INTO customer_contacts ("+ccCols.join(",")+") VALUES ("+ccCols.map(()=>"?").join(",")+")", ccVals); }
         if(children.jobs) for(const j of children.jobs){ const nj=Object.assign({},j); nj.customer_id=newId; const njCols=Object.keys(nj).filter(k=>!["id","uuid","created_at"].includes(k)); const njVals=Object.values(nj); const njUuid=uuid(); njCols.unshift("uuid"); njVals.unshift(njUuid); await exec("INSERT INTO jobs ("+njCols.join(",")+", created_at, updated_at, sync_status) VALUES ("+njCols.map(()=>"?").join(",")+",?,?, 'pending')", [...njVals, nowStr(), nowStr()]); }
       }
