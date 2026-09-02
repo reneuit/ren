@@ -833,7 +833,7 @@ async function deleteCustomer(id){
       {sql:"UPDATE deliveries SET customer_id=NULL WHERE customer_id=?",args:[id]},
       {sql:"UPDATE amc_contracts SET customer_id=NULL WHERE customer_id=?",args:[id]},
       {sql:"UPDATE invoices SET customer_id=NULL WHERE customer_id=?",args:[id]},
-      {sql:"UPDATE customers SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE customers SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(r===null||r===undefined) return toast("Delete failed","error");
     toast("Customer moved to recycle bin","ok");
@@ -1077,13 +1077,13 @@ async function deleteJob(id){
     const parts = await q("SELECT * FROM job_parts WHERE job_id=?",[id]);
     const acts = await q("SELECT * FROM job_activities WHERE job_id=?",[id]);
     const r=await batch([
-      {sql:"UPDATE job_parts SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
-      {sql:"UPDATE job_activities SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
-      {sql:"UPDATE job_documents SET is_deleted=1, deleted_at=? WHERE job_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE job_parts SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE job_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE job_documents SET is_deleted=1, deleted_at=?, updated_at=? WHERE job_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE pickups SET job_id=NULL WHERE job_id=?",args:[id]},
       {sql:"UPDATE deliveries SET job_id=NULL WHERE job_id=?",args:[id]},
       {sql:"UPDATE invoices SET job_id=NULL WHERE job_id=?",args:[id]},
-      {sql:"UPDATE jobs SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE jobs SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(r===null||r===undefined) return toast("Job delete failed","error");
     toast("Deleted","ok"); VIEWS.jobs();
@@ -1723,9 +1723,9 @@ async function deleteLead(id){
     const lead=await q1("SELECT * FROM leads WHERE id=?",[id]); if(!lead) return;
     await moveToRecycle("leads", id, lead.name, "Source "+(lead.source||"")+" Status "+lead.status, JSON.stringify(lead));
     const r=await batch([
-      {sql:"UPDATE lead_activities SET is_deleted=1, deleted_at=? WHERE lead_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE lead_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE lead_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE orders SET lead_id=NULL WHERE lead_id=?",args:[id]},
-      {sql:"UPDATE leads SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE leads SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.leads();
@@ -1910,8 +1910,8 @@ async function deleteOrder(id){
     const o=await q1("SELECT * FROM orders WHERE id=?",[id]); if(!o) return;
     await moveToRecycle("orders", id, o.order_number, "Customer "+o.customer_name, JSON.stringify(o));
     const r=await batch([
-      {sql:"UPDATE order_activities SET is_deleted=1, deleted_at=? WHERE order_id=?",args:[nowStr(),id]},
-      {sql:"UPDATE orders SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE order_activities SET is_deleted=1, deleted_at=?, updated_at=? WHERE order_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE orders SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.orders();
@@ -2067,7 +2067,7 @@ async function vendorForm(id){
 }
 async function deleteVendor(id){
   confirmBox("Delete this vendor? Any jobs linked to this vendor will keep their history.", async ()=>{
-    await exec("UPDATE outsource_vendors SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
+    await exec("UPDATE outsource_vendors SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",[nowStr(),nowStr(),id]);
     toast("Deleted","ok"); VIEWS.outsource();
   },"Delete Vendor");
 }
@@ -2298,9 +2298,9 @@ async function deleteAMC(id){
     const complaints=await q("SELECT * FROM amc_complaints WHERE contract_id=?",[id]);
     await moveToRecycle("amc_contracts", id, contract.contract_number, "Customer "+contract.customer_id, JSON.stringify({contract, visits, complaints}));
     const r=await batch([
-      {sql:"UPDATE amc_visits SET is_deleted=1, deleted_at=? WHERE contract_id=?",args:[nowStr(),id]},
-      {sql:"UPDATE amc_complaints SET is_deleted=1, deleted_at=? WHERE contract_id=?",args:[nowStr(),id]},
-      {sql:"UPDATE amc_contracts SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE amc_visits SET is_deleted=1, deleted_at=?, updated_at=? WHERE contract_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE amc_complaints SET is_deleted=1, deleted_at=?, updated_at=? WHERE contract_id=?",args:[nowStr(),nowStr(),id]},
+      {sql:"UPDATE amc_contracts SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.amc();
@@ -2442,10 +2442,10 @@ async function deleteProduct(id){
     await moveToRecycle("products", id, prod.name, "Code "+(prod.code||''), JSON.stringify(prod));
     const r=await batch([
       {sql:"UPDATE job_parts SET product_id=NULL WHERE product_id=?",args:[id]},
-      {sql:"UPDATE stock_movements SET is_deleted=1, deleted_at=? WHERE product_id=?",args:[nowStr(),id]},
+      {sql:"UPDATE stock_movements SET is_deleted=1, deleted_at=?, updated_at=? WHERE product_id=?",args:[nowStr(),nowStr(),id]},
       {sql:"UPDATE purchase_order_items SET product_id=NULL WHERE product_id=?",args:[id]},
       {sql:"UPDATE invoice_items SET product_id=NULL WHERE product_id=?",args:[id]},
-      {sql:"UPDATE products SET is_deleted=1, deleted_at=? WHERE id=?",args:[nowStr(),id]}
+      {sql:"UPDATE products SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",args:[nowStr(),nowStr(),id]}
     ]);
     if(!r||!r.length) return toast("Delete failed","error");
     toast("Deleted","ok"); VIEWS.inventory();
@@ -2818,7 +2818,7 @@ async function purchaseForm(id){
     if(isEdit){
       ok=await exec("UPDATE purchase_orders SET supplier_id=?, order_date=?, expected_date=?, po_number=?, status=?, subtotal=?, grand_total=?, notes=? WHERE id=?",[supId, gv("po-date"), gv("po-exp")||null, poNumber, gv("po-status"), subtotal, subtotal, gv("po-notes"), id]);
       if(!ok) return;
-      await exec("UPDATE purchase_order_items SET is_deleted=1, deleted_at=? WHERE po_id=?",[nowStr(),id],true);
+      await exec("UPDATE purchase_order_items SET is_deleted=1, deleted_at=?, updated_at=? WHERE po_id=?",[nowStr(),nowStr(),id],true);
     } else {
       ok=await exec("INSERT INTO purchase_orders (po_number, supplier_id, order_date, expected_date, status, subtotal, grand_total, paid_amount, notes, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,0,?,?,?, 'pending')",[poNumber,supId,gv("po-date"),gv("po-exp")||null,gv("po-status"),subtotal,subtotal,gv("po-notes"),SESSION.user.id,nowStr()]);
       if(!ok) return;
@@ -3187,7 +3187,7 @@ async function deleteTransaction(id){
   confirmBox("Delete this transaction? It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const t=await q1("SELECT * FROM transactions WHERE id=?",[id]); if(!t) return;
     await moveToRecycle("transactions", id, t.description||"", "Amount "+fmtMoney(t.amount), JSON.stringify(t));
-    await exec("UPDATE transactions SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
+    await exec("UPDATE transactions SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",[nowStr(),nowStr(),id]);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Transaction");
 }
@@ -3220,7 +3220,7 @@ async function deleteExpense(id){
   confirmBox("Delete this expense? It will be moved to Recycle Bin and can be restored later.", async ()=>{
     const e=await q1("SELECT * FROM expenses WHERE id=?",[id]); if(!e) return;
     await moveToRecycle("expenses", id, e.description||"", "Amount "+fmtMoney(e.amount), JSON.stringify(e));
-    await exec("UPDATE expenses SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
+    await exec("UPDATE expenses SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",[nowStr(),nowStr(),id]);
     toast("Deleted","ok"); VIEWS.accounting();
   },"Delete Expense");
 }
@@ -4252,7 +4252,7 @@ async function deviceTypeForm(id){
 }
 async function deleteDeviceType(id){
   confirmBox("Delete this device type?", async ()=>{
-    await exec("UPDATE device_type_options SET is_deleted=1, deleted_at=? WHERE id=?",[nowStr(),id]);
+    await exec("UPDATE device_type_options SET is_deleted=1, deleted_at=?, updated_at=? WHERE id=?",[nowStr(),nowStr(),id]);
     toast("Deleted","ok"); _deviceTypesCache=null; _deviceTypesLoaded=false; VIEWS.settings();
   },"Delete Device Type");
 }
@@ -4389,7 +4389,7 @@ async function restoreRecycle(id){
     const existing = await q1("SELECT id FROM "+table+" WHERE id=? AND is_deleted=1",[sid]);
     if(existing){
       // un-delete the main record
-      await exec("UPDATE "+table+" SET is_deleted=0, deleted_at=NULL WHERE id=?",[sid]);
+      await exec("UPDATE "+table+" SET is_deleted=0, deleted_at=NULL, updated_at=? WHERE id=?",[nowStr(),sid]);
       // un-delete children that were also soft-deleted
       const childMap = {
         jobs:         [{fk:"job_id", table:"job_parts"},{fk:"job_id", table:"job_activities"},{fk:"job_id", table:"job_documents"}],
@@ -4400,7 +4400,7 @@ async function restoreRecycle(id){
         products:     [{fk:"product_id", table:"stock_movements"}]
       };
       for(const ch of (childMap[table]||[])){
-        await exec("UPDATE "+ch.table+" SET is_deleted=0, deleted_at=NULL WHERE "+ch.fk+"=? AND is_deleted=1",[sid]);
+        await exec("UPDATE "+ch.table+" SET is_deleted=0, deleted_at=NULL, updated_at=? WHERE "+ch.fk+"=? AND is_deleted=1",[nowStr(),sid]);
       }
       await exec("DELETE FROM recycle_bin WHERE id=?",[id],true);
       toast((TABLE_LABELS[table]||table)+" restored","ok"); VIEWS.recycle_bin(); return;
