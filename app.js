@@ -76,7 +76,11 @@ try {
 function _encArg(v) {
   if (v === null || v === undefined) return { type: "null" };
   if (typeof v === "boolean") return { type: "integer", value: v ? "1" : "0" };
-  if (typeof v === "number") return Number.isInteger(v) ? { type: "integer", value: String(v) } : { type: "float", value: String(v) };
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) return { type: "null" };
+    // Hrana/JSON: integer value is a string, float value must be a JSON number (f64)
+    return Number.isInteger(v) ? { type: "integer", value: String(v) } : { type: "float", value: v };
+  }
   return { type: "text", value: String(v) };
 }
 function _decCell(c) {
