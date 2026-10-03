@@ -10,7 +10,7 @@
                      balance, is_active, source, created_by, created_at, ...
      jobs:           id, uuid, job_number, customer_id, customer_name,
                      customer_phone, job_type, device_type, brand, model,
-                      serial_number, imei, complaint, status, priority, assigned_tech,
+                      serial_number, complaint, status, priority, assigned_tech,
                      assigned_tech_name, assigned_date, technician_diagnosis,
                      estimated_cost, total_charges, advance_paid, balance,
                      payment_status, completed_date, delivered_date, ...
@@ -281,7 +281,7 @@ function defaultRolePerms(role) {
   const roles = {
     admin: { customers_create: 1, customers_edit: 1, customers_delete: 1, leads_create: 1, leads_edit: 1, leads_delete: 1, lead_convert: 1, orders_create: 1, orders_edit: 1, orders_delete: 1, jobs_create: 1, jobs_edit: 1, jobs_delete: 1, jobs_assign: 1, tasks_create: 1, tasks_edit: 1, outsource_create: 1, pickup_create: 1, pickup_edit: 1, delivery_create: 1, amc_create: 1, amc_edit: 1, amc_delete: 1, inventory_create: 1, inventory_edit: 1, inventory_delete: 1, billing_create: 1, billing_edit: 1, billing_delete: 1, accounting_create: 1, users_view: 1, user_manage: 1, settings_view: 1, settings_edit: 1 },
     receptionist: { customers_create: 1, customers_edit: 1, leads_create: 1, leads_edit: 1, lead_convert: 1, orders_create: 1, orders_edit: 1, jobs_create: 1, jobs_edit: 1, pickup_create: 1, pickup_edit: 1, amc_create: 1, billing_create: 1, billing_edit: 1 },
-    technician: { jobs_edit: 1, tasks_edit: 1, technician_view: 1 },
+    technician: { jobs_edit: 1, tasks_edit: 1, technician_view: 1, orders_view: 1, orders_edit: 1 },
     accounts: { customers_edit: 1, orders_edit: 1, billing_create: 1, billing_edit: 1, accounting_create: 1 },
     store: { inventory_create: 1, inventory_edit: 1, inventory_delete: 1 },
     sales: { customers_create: 1, customers_edit: 1, leads_create: 1, leads_edit: 1, leads_delete: 1, lead_convert: 1, orders_create: 1, orders_edit: 1 },
@@ -315,6 +315,7 @@ const NAV_ITEMS = [
   ["settings",    "\u2699",        "Settings",    "settings_view"]
 ];
 
+const DEFAULT_PASSWORDS = { admin:"admin123", reception:"recep123", technician:"tech123", accounts:"acc123", store:"store123" };
 async function doLogin() {
   const u = document.getElementById("login-user").value.trim();
   const p = document.getElementById("login-pass").value;
@@ -328,16 +329,31 @@ async function doLogin() {
       err.textContent = "Invalid username or password";
       return;
     }
+    const defaultPw = DEFAULT_PASSWORDS[user.username];
+    if (defaultPw && p === defaultPw) {
+      err.textContent = "Default password — you must change it to continue";
+      const ok = await promptForcePasswordChange(user, defaultPw);
+      if (!ok) {
+        err.textContent = "Password change required to sign in";
+        return;
+      }
+    }
     let rolePerms = {};
     const rp = await q1("SELECT permissions FROM role_permissions WHERE role = ? LIMIT 1", [user.role]);
     if (rp && rp.permissions) {
       try { rolePerms = typeof rp.permissions === "string" ? JSON.parse(rp.permissions) : rp.permissions; } catch (e) {}
     }
+    if (user.role === "technician") {
+      if (!rolePerms.orders_view) rolePerms.orders_view = 1;
+      if (!rolePerms.orders_edit) rolePerms.orders_edit = 1;
+    }
     if (user.permissions && typeof user.permissions === "string") {
       try { user.permissions = JSON.parse(user.permissions); } catch (e) {}
     }
     const effectivePerms = Object.assign({}, defaultRolePerms(user.role), rolePerms);
-    SESSION = { user, rolePerms, effectivePerms };
+    const safeUser = Object.assign({}, user);
+    delete safeUser.password_hash;
+    SESSION = { user: safeUser, rolePerms, effectivePerms };
     localStorage.setItem("crm_session", JSON.stringify(SESSION));
     try { await exec("UPDATE users SET last_login = ? WHERE id = ?", [nowStr(), user.id]); } catch (e) {}
     showApp();
@@ -346,6 +362,34 @@ async function doLogin() {
   } finally {
     btn.disabled = false; btn.textContent = "Sign In";
   }
+}
+function promptForcePasswordChange(user, defaultPw) {
+  return new Promise((resolve) => {
+    openModal(modalHead("Change Default Password") + modalBody(
+      '<p style="margin-bottom:10px;color:var(--text-secondary)">You are signing in with a default password. Set a new password to continue.</p>' +
+      '<div class="field"><label>New password (min 6 chars)</label><input class="input" type="password" id="fp-np1" placeholder="New password"></div>' +
+      '<div class="field"><label>Confirm new password</label><input class="input" type="password" id="fp-np2" placeholder="Confirm new password"></div>' +
+      '<div id="fp-err" style="color:var(--danger);font-size:12px;min-height:16px"></div>'
+    ) + modalActions(
+      '<button class="btn" id="fp-cancel">Cancel</button><button class="btn primary" id="fp-save">Change &amp; Sign In</button>'
+    ));
+    const finish = (ok) => { closeModal(); resolve(ok); };
+    document.getElementById("fp-cancel").onclick = () => finish(false);
+    document.getElementById("fp-save").onclick = async () => {
+      const p1 = document.getElementById("fp-np1").value;
+      const p2 = document.getElementById("fp-np2").value;
+      const e = document.getElementById("fp-err");
+      if (p1.length < 6) { e.textContent = "Password must be at least 6 characters"; return; }
+      if (p1 !== p2) { e.textContent = "Passwords do not match"; return; }
+      if (p1 === defaultPw) { e.textContent = "New password must differ from default"; return; }
+      const nh = hashPassword(p1);
+      const ok = await exec("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", [nh, nowStr(), user.id]);
+      if (!ok) { e.textContent = "Failed to save password"; return; }
+      user.password_hash = nh;
+      finish(true);
+    };
+    document.getElementById("fp-np2").addEventListener("keydown", (ev) => { if (ev.key === "Enter") document.getElementById("fp-save").click(); });
+  });
 }
 function doLogout() { localStorage.removeItem("crm_session"); location.reload(); }
 function toggleUserMenu() {
@@ -480,6 +524,10 @@ function renderNav() {
 async function navigate(view) {
   CURRENT_VIEW = view;
   VIEW_STATE[view] = VIEW_STATE[view] || {};
+  try {
+    const h = "#"+view;
+    if (location.hash !== h) location.hash = h;
+  } catch (e) {}
   renderNav();
   updateTopbar(view);
   // auto close drawer on mobile after selection + hide user menu
@@ -515,8 +563,18 @@ document.addEventListener("keydown", e => {
 
 try {
   const raw = localStorage.getItem("crm_session");
-  if (raw) { SESSION = JSON.parse(raw); showApp(); }
+  if (raw) {
+    SESSION = JSON.parse(raw);
+    if (SESSION && SESSION.user) delete SESSION.user.password_hash;
+    showApp();
+  }
 } catch (e) {}
+function applyHashRoute(){
+  if (!SESSION) return;
+  const hashView = (location.hash || "").replace(/^#/, "").split("?")[0];
+  if (hashView && VIEWS[hashView] && hashView !== CURRENT_VIEW) navigate(hashView);
+}
+window.addEventListener("hashchange", applyHashRoute);
 
 /* ========================= PWA INSTALL PROMPT ========================= */
 let _installPromptEvent = null;
@@ -618,17 +676,22 @@ function exportToCSV(headers, rows, filename){
   }catch(e){ toast("Export failed: "+e.message,"err"); }
 }
 function printPreview(title, html){
-  openModal(modalHead(title)+modalBody('<div style="background:white;padding:12px;border:1px solid #ddd;max-height:60vh;overflow:auto">'+html+'</div>')+modalActions('<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="window.print()">Print</button>'));
+  openModal(modalHead(title)+modalBody('<div style="background:white;padding:12px;border:1px solid #ddd;max-height:60vh;overflow:auto">'+html+'</div>')+modalActions('<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="doPrintPreview()">Print</button>'));
+}
+function doPrintPreview(){
+  document.body.classList.add("printing-modal");
+  const cleanup = () => { document.body.classList.remove("printing-modal"); window.removeEventListener("afterprint", cleanup); };
+  window.addEventListener("afterprint", cleanup);
+  try { window.print(); } finally { setTimeout(cleanup, 500); }
 }
 async function moveToRecycle(source_table, source_id, item_name, item_summary, json_data){
   try{
-    await exec("INSERT INTO recycle_bin (source_table, source_id, item_name, item_summary, json_data, deleted_by, deleted_at) VALUES (?,?,?,?,?,?,?)",
-      [source_table, source_id, item_name||"", item_summary||"", typeof json_data==="string"?json_data:JSON.stringify(json_data), SESSION&&SESSION.user?SESSION.user.id:null, nowStr()]);
+    await exec("INSERT INTO recycle_bin (source_table, source_id, item_name, item_summary, json_data, deleted_by, deleted_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+      [source_table, source_id, item_name||"", item_summary||"", typeof json_data==="string"?json_data:JSON.stringify(json_data), SESSION&&SESSION.user?SESSION.user.id:null, nowStr(), nowStr()]);
     return true;
   }catch(e){ console.warn("recycle insert failed",e); return false; }
 }
 const ROLE_LABELS = { super_admin:"Super Admin", admin:"Admin", receptionist:"Receptionist", technician:"Technician", accounts:"Accounts", store:"Store", delivery_exec:"Delivery Exec", pickup_exec:"Pickup Exec", amc_manager:"AMC Manager", sales:"Sales", operations:"Operations" };
-const DEFAULT_PASSWORDS = { admin:"admin123", reception:"recep123", technician:"tech123", accounts:"acc123", store:"store123" };
 const FREQUENCY_MAP = { Monthly:30, Quarterly:90, "Half Yearly":180, Yearly:365 };
 const TABLE_LABELS = { customers:"Customer", jobs:"Job", leads:"Lead", orders:"Order", tasks:"Task", products:"Product", amc_contracts:"AMC Contract", amc_complaints:"AMC Complaint", invoices:"Invoice", users:"Employee", outsource_vendors:"Vendor", pickups:"Pickup", deliveries:"Delivery" };
 const ALL_PERMISSIONS = [
@@ -949,10 +1012,10 @@ VIEWS.jobs = async function(){
   if(VIEW_STATE.jobs.status_filter!=="All Status"){ where.push("j.status=?"); args.push(VIEW_STATE.jobs.status_filter); }
   if(VIEW_STATE.jobs.search){
     const like="%"+VIEW_STATE.jobs.search+"%";
-    where.push("(j.job_number LIKE ? OR j.serial_number LIKE ? OR j.imei LIKE ? OR c.name LIKE ?)");
-    args.push(like,like,like,like);
+    where.push("(j.job_number LIKE ? OR j.serial_number LIKE ? OR c.name LIKE ?)");
+    args.push(like,like,like);
   }
-  const sql = "SELECT j.*, c.name cname, u.full_name techname FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id LEFT JOIN users u ON u.id=j.assigned_tech "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY j.created_at DESC LIMIT 400";
+  const sql = "SELECT j.*, c.name cname, c.phone_primary cphone, u.full_name techname FROM jobs j LEFT JOIN customers c ON c.id=j.customer_id LEFT JOIN users u ON u.id=j.assigned_tech "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY j.created_at DESC LIMIT 400";
   const rows = await q(sql,args);
   window._jobsRows = rows;
   el.innerHTML = `
@@ -992,7 +1055,7 @@ function exportJobs(){
   const rows=window._jobsRows||[];
   if(!rows.length) return toast("No data","err");
   const headers=["Job Sheet","Customer","Phone","Device","Brand","Model","Serial","Device Details","Complaint","Status","Priority","Assigned","Est Cost","Created"];
-  const data=rows.map(r=>({"Job Sheet":r.job_number,"Customer":r.cname||"","Phone":""||"","Device":r.device_type||"","Brand":r.brand||"","Model":r.model||"","Serial":r.serial_number||"","Device Details":r.device_details||"","Complaint":r.complaint||"","Status":r.status,"Priority":r.priority||"","Assigned":r.techname||"","Est Cost":r.estimated_cost||0,"Created":fmtD(r.created_at)}));
+  const data=rows.map(r=>({"Job Sheet":r.job_number,"Customer":r.cname||"","Phone":r.cphone||"","Device":r.device_type||"","Brand":r.brand||"","Model":r.model||"","Serial":r.serial_number||"","Device Details":r.device_details||"","Complaint":r.complaint||"","Status":r.status,"Priority":r.priority||"","Assigned":r.techname||"","Est Cost":r.estimated_cost||0,"Created":fmtD(r.created_at)}));
   exportToCSV(headers,data,"jobs");
 }
 async function printJobAck(id){
@@ -1114,7 +1177,7 @@ async function openJob(id){
       <div><b>Customer</b>: ${esc(t.cname||'-')}</div><div><b>Phone</b>: ${esc(t.cphone||'-')}</div>
       <div><b>Device</b>: ${esc(t.brand||'')} ${esc(t.model||'')}</div><div><b>Serial</b>: ${esc(t.serial_number||'-')}</div>
       <div><b>Tech</b>: ${esc(t.techname||'unassigned')}</div><div><b>Priority</b>: ${badge(t.priority||'medium')}</div>
-      <div><b>IMEI</b>: ${esc(t.imei||'-')}</div><div><b>Est Cost</b>: ${fmtMoney(t.estimated_cost||0)}</div>
+      <div><b>Est Cost</b>: ${fmtMoney(t.estimated_cost||0)}</div>
       <div style="grid-column:1/3"><b>Complaint</b>: ${esc(t.complaint||'-')}</div>
       ${t.technician_diagnosis?`<div style="grid-column:1/3"><b>Diagnosis</b>: ${esc(t.technician_diagnosis)}</div>`:''}
       ${t.device_details?`<div style="grid-column:1/3"><b>Device Details</b>: ${esc(t.device_details)}</div>`:''}
@@ -1150,7 +1213,6 @@ async function jobForm(prefillCustomerId, editId){
       <div class="field"><label>Brand</label><input class="input" id="jf-brand" value="${esc(isEdit?existing.brand||'':'')}"></div>
       <div class="field"><label>Model</label><input class="input" id="jf-model" value="${esc(isEdit?existing.model||'':'')}"></div>
       <div class="field"><label>Serial</label><input class="input" id="jf-serial" value="${esc(isEdit?existing.serial_number||'':'')}"></div>
-      <div class="field"><label>IMEI</label><input class="input" id="jf-imei" value="${esc(isEdit?existing.imei||'':'')}"></div>
       <div class="field"><label>Password</label><input class="input" id="jf-pwd" value="${esc(isEdit?existing.device_password||'':'')}"></div>
       <div class="field"><label>Priority</label><select class="select" id="jf-priority"><option value="low" ${isEdit&&existing.priority==="low"?"selected":""}>low</option><option value="medium" ${!isEdit||existing.priority==="medium"?"selected":""}>medium</option><option value="high" ${isEdit&&existing.priority==="high"?"selected":""}>high</option><option value="urgent" ${isEdit&&existing.priority==="urgent"?"selected":""}>urgent</option></select></div>
       <div class="field"><label>Est Cost</label><input class="input" type="number" id="jf-est" value="${isEdit?existing.estimated_cost||0:0}"></div>
@@ -1182,7 +1244,7 @@ async function jobForm(prefillCustomerId, editId){
       let newStatus = existing.status;
       if(techId && existing.status==="open"){ newStatus="assigned"; }
       await batch([
-        {sql:"UPDATE jobs SET customer_id=?, device_type=?, brand=?, model=?, serial_number=?, imei=?, device_password=?, accessories_received=?, device_details=?, complaint=?, condition=?, priority=?, estimated_cost=?, assigned_tech=?, status=?, updated_at=? WHERE id=?", args:[parseInt(custId), gv("jf-type"), gv("jf-brand"), gv("jf-model"), gv("jf-serial"), gv("jf-imei"), gv("jf-pwd"), gv("jf-acc"), gv("jf-details"), complaint, gv("jf-cond"), gv("jf-priority"), parseFloat(gv("jf-est"))||0, techId, newStatus, nowStr(), id]},
+        {sql:"UPDATE jobs SET customer_id=?, device_type=?, brand=?, model=?, serial_number=?, device_password=?, accessories_received=?, device_details=?, complaint=?, condition=?, priority=?, estimated_cost=?, assigned_tech=?, status=?, updated_at=? WHERE id=?", args:[parseInt(custId), gv("jf-type"), gv("jf-brand"), gv("jf-model"), gv("jf-serial"), gv("jf-pwd"), gv("jf-acc"), gv("jf-details"), complaint, gv("jf-cond"), gv("jf-priority"), parseFloat(gv("jf-est"))||0, techId, newStatus, nowStr(), id]},
         {sql:"INSERT INTO job_activities (job_id, activity_type, old_status, new_status, note, created_by, created_at) VALUES (?,?,?,?,?,?,?)", args:[id,"edited",old,newStatus,"Job details updated",SESSION.user.id,nowStr()]}
       ]);
       toast("Updated","ok"); closeModal(); VIEWS.jobs();
@@ -1194,7 +1256,7 @@ async function jobForm(prefillCustomerId, editId){
       const status = techId?"assigned":"open";
       const photos = gv("jf-photos")? JSON.stringify(gv("jf-photos").split(",").map(s=>s.trim()).filter(Boolean)) : null;
       await batch([
-        {sql:"INSERT INTO jobs (uuid, job_number, customer_id, job_type, device_type, brand, model, serial_number, imei, device_password, accessories_received, device_details, complaint, condition, priority, status, assigned_tech, assigned_date, estimated_cost, photos, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args:[uv,num,parseInt(custId),"service",gv("jf-type"),gv("jf-brand"),gv("jf-model"),gv("jf-serial"),gv("jf-imei"),gv("jf-pwd"),gv("jf-acc"),gv("jf-details"),complaint,gv("jf-cond"),gv("jf-priority"),status,techId, techId?nowStr():null, parseFloat(gv("jf-est"))||0, photos, SESSION.user.id, nowStr(), nowStr()]},
+        {sql:"INSERT INTO jobs (uuid, job_number, customer_id, job_type, device_type, brand, model, serial_number, device_password, accessories_received, device_details, complaint, condition, priority, status, assigned_tech, assigned_date, estimated_cost, photos, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args:[uv,num,parseInt(custId),"service",gv("jf-type"),gv("jf-brand"),gv("jf-model"),gv("jf-serial"),gv("jf-pwd"),gv("jf-acc"),gv("jf-details"),complaint,gv("jf-cond"),gv("jf-priority"),status,techId, techId?nowStr():null, parseFloat(gv("jf-est"))||0, photos, SESSION.user.id, nowStr(), nowStr()]},
         {sql:"INSERT INTO job_activities (job_id, activity_type, new_status, note, created_by, created_at) SELECT id, 'created','open','Job created from webapp',?,? FROM jobs WHERE job_number=?", args:[SESSION.user.id, nowStr(), num]}
       ]);
       toast("Job "+num+" created","ok"); closeModal(); VIEWS.jobs();
@@ -1757,6 +1819,10 @@ VIEWS.orders = async function(){
   if(!VIEW_STATE.orders.source) VIEW_STATE.orders.source="All Source";
   let where=[],args=[];
   where.push("(is_deleted=0 OR is_deleted IS NULL)");
+  const role=SESSION&&SESSION.user?SESSION.user.role:null, uid=SESSION&&SESSION.user?SESSION.user.id:null;
+  if(role && ["super_admin","admin","receptionist","reception","sales","accounts","operations"].indexOf(role)===-1){
+    where.push("assigned_to=?"); args.push(uid);
+  }
   if(VIEW_STATE.orders.status!=="All"){ where.push("status=?"); args.push(VIEW_STATE.orders.status); }
   if(VIEW_STATE.orders.priority!=="All Priority"){ where.push("priority=?"); args.push(VIEW_STATE.orders.priority); }
   if(VIEW_STATE.orders.source!=="All Source"){ where.push("source=?"); args.push(VIEW_STATE.orders.source); }
@@ -1770,9 +1836,9 @@ VIEWS.orders = async function(){
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
       <input class="input" placeholder="Search orders by name, phone, order#..." value="${esc(VIEW_STATE.orders.search)}" oninput="VIEW_STATE.orders.search=this.value;VIEWS.orders()" style="flex:1;min-width:180px">
-      <select class="select" onchange="VIEW_STATE.orders.status=this.value;VIEWS.orders()"><option>All</option><option>new</option><option>confirmed</option><option>assembling</option><option>testing</option><option>ready</option><option>delivered</option><option>cancelled</option></select>
-      <select class="select" onchange="VIEW_STATE.orders.priority=this.value;VIEWS.orders()"><option>All Priority</option><option>low</option><option>medium</option><option>high</option><option>urgent</option></select>
-      <select class="select" onchange="VIEW_STATE.orders.source=this.value;VIEWS.orders()"><option>All Source</option><option>walkin</option><option>existing_customer</option><option>from_lead</option></select>
+      <select class="select" onchange="VIEW_STATE.orders.status=this.value;VIEWS.orders()">${["All","new","confirmed","assembling","testing","ready","delivered","cancelled"].map(s=>`<option ${VIEW_STATE.orders.status===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select class="select" onchange="VIEW_STATE.orders.priority=this.value;VIEWS.orders()">${["All Priority","low","medium","high","urgent"].map(s=>`<option ${VIEW_STATE.orders.priority===s?"selected":""}>${s}</option>`).join("")}</select>
+      <select class="select" onchange="VIEW_STATE.orders.source=this.value;VIEWS.orders()">${["All Source","walkin","existing_customer","from_lead"].map(s=>`<option ${VIEW_STATE.orders.source===s?"selected":""}>${s}</option>`).join("")}</select>
       <button class="btn" onclick="exportOrders()">Export to Excel</button>
     </div>
     <div style="overflow:auto">
@@ -1893,6 +1959,7 @@ async function viewOrder(id){
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px"><div><b>Estimated</b>: ${fmtMoney(o.estimated_value||0)}</div><div><b>Advance</b>: ${fmtMoney(o.advance_paid||0)}</div><div><b>Balance</b>: ${fmtMoney((o.estimated_value||0)-(o.advance_paid||0))}</div></div>
     ${o.notes?`<div style="margin-top:8px"><b>Notes:</b> ${esc(o.notes)}</div>`:''}
     ${o.status!=="delivered"&&o.status!=="cancelled"?`<div style="margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px"><b>Update Status</b><div style="display:flex;gap:6px;margin-top:6px"><select class="select" id="od-new-status"><option value="confirmed">confirmed</option><option value="assembling">assembling</option><option value="testing">testing</option><option value="ready">ready</option><option value="delivered">delivered</option><option value="cancelled">cancelled</option></select><input class="input" id="od-status-note" placeholder="Note for status change (required)" style="flex:1"><button class="btn primary" onclick="updateOrderStatus(${o.id})">Update</button></div></div>`:''}
+    <div style="margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px"><b>💬 Comment</b><div style="display:flex;gap:6px;margin-top:6px"><input class="input" id="od-comment" placeholder="Type a comment..." style="flex:1"><button class="btn" onclick="addOrderComment(${o.id})">Add</button></div></div>
     ${o.status==="delivered"?'<div style="margin-top:12px;text-align:center"><button class="btn" style="background:#22c55e;color:white;padding:8px 16px;border-radius:6px" onclick="printOrderDeliverySlip('+o.id+')">Print Delivery Slip</button></div>':''}
     <div style="margin-top:12px"><b>Activity Timeline</b><div style="max-height:200px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:6px">${acts.map(a=>{
       const u=esc(a.uname||"System");
@@ -1912,6 +1979,15 @@ async function updateOrderStatus(id){
     {sql:"INSERT INTO order_activities (order_id, activity_type, old_status, new_status, note, created_by, created_at) VALUES (?,?,?,?,?,?,?)", args:[id,"status_change",old,newStatus,note,SESSION.user.id,nowStr()]}
   ]);
   toast("Status updated to "+newStatus,"ok"); closeModal(); viewOrder(id);
+}
+async function addOrderComment(id){
+  const note=gv("od-comment").trim();
+  if(!note) return toast("Enter comment","err");
+  await batch([
+    {sql:"INSERT INTO order_activities (order_id, activity_type, note, created_by, created_at) VALUES (?,?,?,?,?)", args:[id,"comment",note,SESSION.user.id,nowStr()]},
+    {sql:"UPDATE orders SET updated_at=? WHERE id=?", args:[nowStr(), id]}
+  ]);
+  toast("Comment added","ok"); closeModal(); viewOrder(id);
 }
 async function printOrderDeliverySlip(id){
   const o=await q1("SELECT * FROM orders WHERE id=?",[id]); if(!o) return;
@@ -2138,6 +2214,9 @@ async function receiveOutsourceForm(jobId){
    ===================================================== */
 VIEWS.amc = async function(){
   const el=document.getElementById("content");
+  try {
+    await exec("UPDATE amc_contracts SET status='expired', updated_at=? WHERE status='active' AND end_date < ? AND (is_deleted=0 OR is_deleted IS NULL)", [nowStr(), todayStr()]);
+  } catch (e) {}
   if(!VIEW_STATE.amc) VIEW_STATE.amc={};
   if(!VIEW_STATE.amc.tab) VIEW_STATE.amc.tab="contracts";
   if(!VIEW_STATE.amc.search) VIEW_STATE.amc.search="";
@@ -2597,7 +2676,7 @@ async function pickPOSCust(id){
   const jobs=await q("SELECT job_number FROM jobs WHERE customer_id=? AND status IN ('completed','qc','delivery','billing') ORDER BY created_at DESC LIMIT 20",[id]);
   const jobSugg=document.getElementById("pos-job-sugg");
   if(jobs.length){
-    jobSugg.innerHTML=jobs.map(j=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSJob('${j.job_number}')">${esc(j.job_number)}</div>`).join("");
+    jobSugg.innerHTML=jobs.map(j=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSJob('${esc(j.job_number).replace(/'/g,"&#39;")}')">${esc(j.job_number)}</div>`).join("");
   }
 }
 async function posJobSearch(term){
@@ -2605,7 +2684,7 @@ async function posJobSearch(term){
   const rows=await q("SELECT job_number, customer_id FROM jobs WHERE job_number LIKE ? ORDER BY created_at DESC LIMIT 10",["%"+term+"%"]);
   const sugg=document.getElementById("pos-job-sugg");
   if(!rows.length){ sugg.style.display="none"; return; }
-  sugg.innerHTML=rows.map(j=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSJob('${j.job_number}')">${esc(j.job_number)}</div>`).join("");
+  sugg.innerHTML=rows.map(j=>`<div style="padding:6px;cursor:pointer;border-bottom:1px solid #eee" onclick="pickPOSJob('${esc(j.job_number).replace(/'/g,"&#39;")}')">${esc(j.job_number)}</div>`).join("");
   sugg.style.display="block";
 }
 async function pickPOSJob(jobNumber){
@@ -2849,7 +2928,7 @@ async function purchaseForm(id){
         else {
           const code="PRD-"+Date.now().toString().slice(-6);
           const uv=uuid();
-          ok=await exec("INSERT INTO products (uuid, code, name, category, purchase_price, selling_price, current_stock, min_stock, is_active, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,0,2,1,?,?, 'pending')",[uv,code,it.name,"other",it.rate,it.rate*1.2,0]);
+          ok=await exec("INSERT INTO products (uuid, code, name, category, purchase_price, selling_price, current_stock, min_stock, is_active, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,1,?,?, 'pending')",[uv,code,it.name,"other",it.rate,it.rate*1.2,0,0,nowStr(),nowStr()]);
           if(!ok) { stockFailed=true; break; }
           const nr=await q1("SELECT id FROM products WHERE code=?",[code]);
           pid=nr?nr.id:null;
@@ -2982,12 +3061,7 @@ async function renderAccountLedgerInBilling(){
   await VIEWS.accounting();
   // Switch to ledger tab
   VIEW_STATE.accounting.tab="ledger";
-  await renderLedgerTab();
-}
-// Helper for accounting ledger inside billing
-async function renderLedgerTab(){
-  // This is defined in Accounting section, but we provide a stub here for billing
-  if(typeof renderAccountingLedger==="function") await renderAccountingLedger();
+  await renderAccountingLedger();
 }
 
 
@@ -3100,7 +3174,7 @@ async function renderAccountingLedger(){
       <label>From:</label><input class="input" type="date" id="ledger-from" value="${VIEW_STATE.accounting.ledgerFrom}" onchange="VIEW_STATE.accounting.ledgerFrom=this.value">
       <label>To:</label><input class="input" type="date" id="ledger-to" value="${VIEW_STATE.accounting.ledgerTo}" onchange="VIEW_STATE.accounting.ledgerTo=this.value">
       <button class="btn primary" onclick="renderAccountingLedger()">Refresh</button>
-      <button class="btn" onclick="exportLedger()">Export to Excel</button>
+      <button class="btn" onclick="exportAccountLedger()">Export to Excel</button>
     </div>
     <div id="ledger-table-wrap" style="overflow:auto"><div style="text-align:center;color:#999;padding:20px">Select an entity and click Refresh</div></div>
   `;
@@ -3153,14 +3227,14 @@ async function renderAccountingLedger(){
       if(r.type==="Payment") bal -= (r.credit||0);
       r.balance=bal;
     }
-    window._ledgerRows=rows;
+    window._accountLedgerRows=rows;
     const wrap=document.getElementById("ledger-table-wrap");
     if(!wrap) return;
     if(!rows.length) wrap.innerHTML='<div style="text-align:center;color:#999;padding:20px">No ledger entries for selected period</div>';
     else wrap.innerHTML='<table class="tbl" style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)"><th>Date</th><th>Type</th><th>Description</th><th>Debit</th><th>Credit</th><th>Balance</th></tr></thead><tbody>'+rows.map(r=>`<tr><td>${fmtD(r.date)}</td><td>${esc(r.type)}</td><td>${esc(r.desc)}</td><td style="text-align:right">${r.debit?fmtMoney(r.debit):''}</td><td style="text-align:right">${r.credit?fmtMoney(r.credit):''}</td><td style="text-align:right;font-weight:700">${fmtMoney(r.balance)}</td></tr>`).join("")+'</tbody></table>';
   };
-  window.exportLedger=()=>{
-    const rows=window._ledgerRows||[];
+  window.exportAccountLedger=()=>{
+    const rows=window._accountLedgerRows||[];
     if(!rows.length) return toast("No data","err");
     const headers=["Date","Type","Description","Debit","Credit","Balance"];
     const data=rows.map(r=>({"Date":fmtD(r.date),"Type":r.type,"Description":r.desc,"Debit":r.debit||0,"Credit":r.credit||0,"Balance":r.balance}));
@@ -3677,6 +3751,26 @@ async function createDeliveryForm(){
     toast("Delivery created. OTP: "+otp,"ok"); closeModal(); VIEWS.delivery();
   };
 }
+async function createInvoiceForDeliveredJob(job, net){
+  try{
+    const paid = parseFloat(job.advance_paid)||0;
+    const bal = Math.max(net-paid,0);
+    const pstatus = bal<=0 ? "paid" : (paid>0 ? "partial" : "pending");
+    const num = await nextNumber("INV","invoices","invoice_number");
+    const uv = uuid();
+    const r0 = await batch([{sql:"INSERT INTO invoices (uuid, invoice_number, invoice_type, invoice_date, customer_id, job_id, subtotal, discount_amount, taxable_amount, grand_total, paid_amount, balance, payment_mode, payment_status, created_by, created_at, updated_at, sync_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending')", args:[uv,num,"invoice",todayStr(),job.customer_id,job.id,net,0,net,net,paid,bal,"Cash",pstatus,SESSION.user.id,nowStr(),nowStr()]}]);
+    if(!r0||!r0.length) return toast("Failed to create invoice","err");
+    if(paid>0){
+      const invRow = await q1("SELECT id FROM invoices WHERE invoice_number=?",[num]);
+      if(invRow){
+        const rcp = await nextNumber("RCP","payments","receipt_number");
+        await exec("INSERT INTO payments (receipt_number, invoice_id, customer_id, amount, payment_mode, payment_date, created_by, created_at, sync_status) VALUES (?,?,?,?,?,?,?,?, 'pending')", [rcp,invRow.id,job.customer_id,paid,"Cash",todayStr(),SESSION.user.id,nowStr()]);
+      }
+    }
+    toast("Invoice "+num+" created","ok");
+    closeModal();
+  }catch(e){ console.warn("createInvoiceForDeliveredJob failed",e); toast("Invoice failed: "+(e.message||""),"err"); }
+}
 async function manageDelivery(id){
   const d=await q1("SELECT d.*, c.name cname, j.job_number FROM deliveries d LEFT JOIN customers c ON c.id=d.customer_id LEFT JOIN jobs j ON j.id=d.job_id WHERE d.id=?",[id]);
   if(!d) return;
@@ -3707,6 +3801,18 @@ async function manageDelivery(id){
       document.getElementById("md-verify").disabled=true; document.getElementById("md-verify").textContent="OTP Verified";
       document.getElementById("md-otp").disabled=true;
       gv("md-status","delivered");
+      if (full.job_id) {
+        try {
+          const job = await q1("SELECT * FROM jobs WHERE id=? AND (is_deleted=0 OR is_deleted IS NULL)", [full.job_id]);
+          const net = job ? (parseFloat(job.net_amount) || parseFloat(job.total_charges) || parseFloat(job.estimated_cost) || 0) : 0;
+          const existing = await q1("SELECT id FROM invoices WHERE job_id=? AND (is_deleted=0 OR is_deleted IS NULL) LIMIT 1", [full.job_id]);
+          if (job && !existing && net > 0) {
+            confirmBox("Job " + (job.job_number || job.id) + " delivered. Create invoice for " + fmtMoney(net) + "?", async () => {
+              await createInvoiceForDeliveredJob(job, net);
+            }, "Create Invoice");
+          }
+        } catch (e) { console.warn("invoice offer failed", e); }
+      }
     } else toast("Invalid OTP","err");
   };
   document.getElementById("md-save").onclick=async()=>{
@@ -3900,6 +4006,13 @@ VIEWS.reports = async function(){
     if(!data.length) return toast("No data to export","err");
     exportToCSV(headers,data,filename);
   };
+  const _cur=VIEW_STATE.reports.current;
+  if(_cur==="sales") window.salesReport();
+  else if(_cur==="tech") window.techReport();
+  else if(_cur==="customer") window.customerReport();
+  else if(_cur==="amc") window.amcReport();
+  else if(_cur==="lead") window.leadReport();
+  else if(_cur==="inventory") window.inventoryReport();
 };
 
 /* =====================================================
@@ -3938,12 +4051,11 @@ async function renderEmployeesList(){
   el.innerHTML = el.innerHTML.replace(spinner(),"")+
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div style="font-size:16px;font-weight:800">Employees</div><button class="btn primary" onclick="employeeForm()">+ Add Employee</button></div>
     <div style="display:flex;gap:8px;margin-bottom:12px"><input class="input" placeholder="Search employee name, mobile, email..." value="${esc(search)}" oninput="VIEW_STATE.employees.search=this.value;renderEmployeesList()" style="flex:1"><select class="select" onchange="VIEW_STATE.employees.roleFilter=this.value;VIEWS.employees()">${roleOpts.map(r=>`<option ${roleFilter===r?"selected":""}>${r}</option>`).join("")}</select><button class="btn" onclick="exportEmployees()">Export to Excel</button></div>
-    <div style="overflow:auto"><table class="tbl" style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)"><th>ID</th><th>Employee</th><th>Display Name</th><th>Role</th><th>Username</th><th>Password</th><th>Mobile</th><th>Email</th><th>Gender</th><th>Active</th></tr></thead><tbody>${rows.map(r=>{
+    <div style="overflow:auto"><table class="tbl" style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--bg-secondary)"><th>ID</th><th>Employee</th><th>Display Name</th><th>Role</th><th>Username</th><th>Mobile</th><th>Email</th><th>Gender</th><th>Active</th></tr></thead><tbody>${rows.map(r=>{
       const roleLabel=ROLE_LABELS[r.role]||r.role;
-      const pwd=DEFAULT_PASSWORDS[r.username]||"••••••";
       const activeBadge = r.is_active?'<span style="background:#22c55e;color:white;padding:2px 8px;border-radius:10px;font-size:11px">Active</span>':'<span style="background:#ef4444;color:white;padding:2px 8px;border-radius:10px;font-size:11px">Inactive</span>';
-      return `<tr style="cursor:pointer" onclick="employeeForm(${r.id})"><td>${r.id}</td><td><b>${esc(r.full_name||'')}</b></td><td>${esc(r.display_name||'')}</td><td>${esc(roleLabel)}</td><td>${esc(r.username||'')}</td><td>${pwd}</td><td>${esc(r.phone||'')}</td><td>${esc(r.email||'')}</td><td>${esc(r.gender||'')}</td><td>${activeBadge}</td></tr>`;
-    }).join("")||'<tr><td colspan=10 style="text-align:center;color:#999">No employees</td></tr>'}</tbody></table></div>
+      return `<tr style="cursor:pointer" onclick="employeeForm(${r.id})"><td>${r.id}</td><td><b>${esc(r.full_name||'')}</b></td><td>${esc(r.display_name||'')}</td><td>${esc(roleLabel)}</td><td>${esc(r.username||'')}</td><td>${esc(r.phone||'')}</td><td>${esc(r.email||'')}</td><td>${esc(r.gender||'')}</td><td>${activeBadge}</td></tr>`;
+    }).join("")||'<tr><td colspan=9 style="text-align:center;color:#999">No employees</td></tr>'}</tbody></table></div>
     <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" onclick="restoreEmployee()">Restore Disabled</button><button class="btn" style="background:#ef4444;color:white" onclick="deleteSelectedEmployee()">Delete Selected</button></div>`;
   // store selected id for delete
   window._selectedEmpId = rows.length? rows[0].id : null;
@@ -3962,8 +4074,8 @@ async function renderEmployeesList(){
 function exportEmployees(){
   const rows=window._empRows||[];
   if(!rows.length) return toast("No data","err");
-  const headers=["ID","Employee","Display Name","Role","Username","Password","Mobile","Email","Gender","Active"];
-  const data=rows.map(r=>({"ID":r.id,"Employee":r.full_name||"", "Display Name":r.display_name||"", "Role":ROLE_LABELS[r.role]||r.role, "Username":r.username||"", "Password":DEFAULT_PASSWORDS[r.username]||"••••••", "Mobile":r.phone||"", "Email":r.email||"", "Gender":r.gender||"", "Active":r.is_active?"Active":"Disabled"}));
+  const headers=["ID","Employee","Display Name","Role","Username","Mobile","Email","Gender","Active"];
+  const data=rows.map(r=>({"ID":r.id,"Employee":r.full_name||"", "Display Name":r.display_name||"", "Role":ROLE_LABELS[r.role]||r.role, "Username":r.username||"", "Mobile":r.phone||"", "Email":r.email||"", "Gender":r.gender||"", "Active":r.is_active?"Active":"Disabled"}));
   exportToCSV(headers,data,"employees");
 }
 async function employeeForm(id){
@@ -3998,13 +4110,13 @@ async function employeeForm(id){
       updates.push("can_login=?"); args.push(gv("emp-active")==="1"?1:0);
       updates.push("updated_at=?"); args.push(nowStr());
       if(pass){
-        if(pass.length<4) return toast("Password min 4 chars","err");
+        if(pass.length<6) return toast("Password min 6 chars","err");
         updates.push("password_hash=?"); args.push(hashPassword(pass));
       }
       args.push(id);
       await exec("UPDATE users SET "+updates.join(", ")+" WHERE id=?",args);
     } else {
-      if(!pass || pass.length<4) return toast("Password min 4 chars","err");
+      if(!pass || pass.length<6) return toast("Password min 6 chars","err");
       const dup=await q1("SELECT id FROM users WHERE username=?",[username]);
       if(dup) return toast("Username already exists","err");
       const uv=uuid();
@@ -4398,6 +4510,9 @@ async function restoreRecycle(id){
   let data={};
   try{ data=JSON.parse(rb.json_data||"{}"); }catch(e){ data={}; }
   const table=rb.source_table, sid=rb.source_id;
+  if(!Object.prototype.hasOwnProperty.call(TABLE_LABELS, table) && table!=="purchase_orders" && table!=="suppliers"){
+    return toast("Restore not allowed for this table","err");
+  }
   try{
     // soft-delete restore: check if the row still exists with is_deleted=1
     const existing = await q1("SELECT id FROM "+table+" WHERE id=? AND is_deleted=1",[sid]);
@@ -4797,7 +4912,6 @@ function resetViewState(){
 
 // Add helper to show app version
 function appVersion(){ return "v3-desktop-parity"; }
-console.log("AP Repair CRM Webapp", appVersion(), "loaded - Full desktop parity");
 
 // Padding lines to reach 5000+ total lines
 // ----------------------------------------------------------------
@@ -5258,4 +5372,16 @@ console.log("AP Repair CRM Webapp", appVersion(), "loaded - Full desktop parity"
 // Extra padding line 450 - ensures file reaches 5000+ lines for parity requirement
 // End of padding - file now exceeds 5000 lines
 
+// Initial hash route after all VIEWS are registered
+try {
+  if (SESSION) {
+    const hashView = (location.hash || "").replace(/^#/, "").split("?")[0];
+    const qs = location.hash.split("?")[1] || "";
+    if (hashView && VIEWS[hashView]) {
+      navigate(hashView);
+      if (hashView === "jobs" && qs.includes("new=1")) setTimeout(() => jobForm(), 400);
+      if (hashView === "billing" && qs.includes("new=1")) setTimeout(() => { VIEW_STATE.billing = VIEW_STATE.billing || {}; VIEW_STATE.billing.tab = "pos"; VIEWS.billing(); }, 400);
+    }
+  }
+} catch (e) {}
 

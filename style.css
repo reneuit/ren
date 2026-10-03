@@ -1113,6 +1113,26 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 
   .main-shell { height: auto; overflow: visible; }
   .content { overflow: visible; padding: 0; max-width: none; height: auto; }
   .card { box-shadow: none; border: 1px solid #ddd; }
+  body.printing-modal #app-view { display: none !important; }
+  body.printing-modal .modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    display: block !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  body.printing-modal .modal {
+    max-height: none !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    width: auto !important;
+    height: auto !important;
+  }
+  body:not(.printing-modal) .modal-backdrop { display: none !important; }
+  .modal-actions, .modal-close, .btn { display: none !important; }
+  body.printing-modal .modal-actions { display: none !important; }
 }
 
 /* Utility for old hide-mobile shim */

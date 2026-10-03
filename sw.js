@@ -2,15 +2,18 @@
    - Caches the app shell for instant load
    - Network-first for Turso API calls (always fresh data)
    - Falls back to cache if offline */
-const CACHE = "ap-crm-v15";
+const CACHE = "ap-crm-v17";
 const SHELL = [
   "./",
   "./index.html",
+  "./style.css?v=15",
+  "./app.js?v=15",
   "./style.css",
   "./app.js",
   "./manifest.json",
   "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./icons/icon-512.png",
+  "./icons/apple-touch-180.png"
 ];
 
 self.addEventListener("install", e => {
@@ -42,7 +45,7 @@ self.addEventListener("fetch", e => {
           caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => null);
         }
         return resp;
-      }).catch(() => cached);
+      }).catch(() => cached || Response.error());
     })
   );
 });
