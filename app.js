@@ -213,7 +213,7 @@ function closeModal() {
   document.getElementById("modal-backdrop").style.display = "none";
   document.body.style.overflow = "";
 }
-function modalHead(title) { return '<div class="modal-head"><h2>' + esc(title) + '</h2><button class="modal-x" onclick="closeModal()">\u2715</button></div>'; }
+function modalHead(title, raw) { return '<div class="modal-head"><h2>' + (raw ? title : esc(title)) + '</h2><button class="modal-x" onclick="closeModal()">\u2715</button></div>'; }
 function modalBody(c) { return '<div class="modal-body">' + c + '</div>'; }
 function modalActions(b) { return '<div class="modal-actions">' + b + '</div>'; }
 function confirmBox(msg, onYes, title) {
@@ -1828,6 +1828,10 @@ VIEWS.orders = async function(){
   if(VIEW_STATE.orders.source!=="All Source"){ where.push("source=?"); args.push(VIEW_STATE.orders.source); }
   if(VIEW_STATE.orders.search){ const like="%"+VIEW_STATE.orders.search+"%"; where.push("(customer_name LIKE ? OR phone LIKE ? OR order_number LIKE ?)"); args.push(like,like,like); }
   const rows=await q("SELECT * FROM orders "+(where.length?"WHERE "+where.join(" AND "):"")+" ORDER BY created_at DESC LIMIT 300",args);
+  const uids=[...new Set(rows.map(r=>r.assigned_to).filter(Boolean))];
+  const umap={};
+  if(uids.length){ const us=await q("SELECT id, full_name FROM users WHERE id IN ("+uids.map(()=>"?").join(",")+")",uids); us.forEach(u=>umap[u.id]=u.full_name); }
+  rows.forEach(r=>r.assignee=r.assigned_to?umap[r.assigned_to]||null:null);
   window._ordersRows=rows;
   el.innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1843,13 +1847,13 @@ VIEWS.orders = async function(){
     </div>
     <div style="overflow:auto">
       <table class="tbl" style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:var(--bg-secondary)"><th>ID</th><th>Order#</th><th>Customer</th><th>Phone</th><th>Device</th><th>Qty</th><th>Status</th><th>Priority</th><th>Est. Delivery</th><th>Amount</th><th>Actions</th></tr></thead>
+        <thead><tr style="background:var(--bg-secondary)"><th>ID</th><th>Order#</th><th>Customer</th><th>Phone</th><th>Device</th><th>Qty</th><th>Status</th><th>Priority</th><th>Assigned To</th><th>Est. Delivery</th><th>Amount</th><th>Actions</th></tr></thead>
         <tbody>${rows.map(o=>{
           const device=((o.device_type||"")+" "+(o.device_brand||"")).trim()||"-";
           const est=o.expected_delivery?fmtD(o.expected_delivery):"-";
           const amt=o.estimated_value?fmtMoney(o.estimated_value):"-";
           const disabled = o.status==="delivered"||o.status==="cancelled";
-          return `<tr><td>${o.id}</td><td><b>${esc(o.order_number||'')}</b></td><td>${esc(o.customer_name||'')}</td><td>${esc(o.phone||'')}</td><td>${esc(device)}</td><td style="text-align:center">${o.quantity||1}</td><td>${badge(o.status)}</td><td>${badge(o.priority||'medium')}</td><td>${est}</td><td>${amt}</td><td><div style="display:flex;gap:4px">${hasPerm("orders_view")?`<button class="btn sm" style="background:#3b82f6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="viewOrder(${o.id})">View</button>`:''}${hasPerm("orders_edit")&&!disabled?`<button class="btn sm" style="background:#8b5cf6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="orderForm(${o.id})">Edit</button>`:''}${hasPerm("orders_delete")&&!disabled?`<button class="btn sm" style="background:#ef4444;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="deleteOrder(${o.id})">Del</button>`:''}</div></td></tr>`;
+          return `<tr><td>${o.id}</td><td><b>${esc(o.order_number||'')}</b></td><td>${esc(o.customer_name||'')}</td><td>${esc(o.phone||'')}</td><td>${esc(device)}</td><td style="text-align:center">${o.quantity||1}</td><td>${badge(o.status)}</td><td>${badge(o.priority||'medium')}</td><td>${o.assignee?esc(o.assignee):'<span style="color:#999">-</span>'}</td><td>${est}</td><td>${amt}</td><td><div style="display:flex;gap:4px">${hasPerm("orders_view")?`<button class="btn sm" style="background:#3b82f6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="viewOrder(${o.id})">View</button>`:''}${hasPerm("orders_edit")&&!disabled?`<button class="btn sm" style="background:#8b5cf6;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="orderForm(${o.id})">Edit</button>`:''}${hasPerm("orders_delete")&&!disabled?`<button class="btn sm" style="background:#ef4444;color:white;padding:4px 6px;border-radius:4px;font-size:11px" onclick="deleteOrder(${o.id})">Del</button>`:''}</div></td></tr>`;
         }).join("")}</tbody>
       </table>
     </div>
@@ -1859,8 +1863,8 @@ VIEWS.orders = async function(){
 function exportOrders(){
   const rows=window._ordersRows||[];
   if(!rows.length) return toast("No data","err");
-  const headers=["Order#","Customer","Phone","Device","Qty","Status","Priority","Est Delivery","Amount"];
-  const data=rows.map(o=>({"Order#":o.order_number,"Customer":o.customer_name,"Phone":o.phone||"", "Device":(o.device_type||"")+" "+(o.device_brand||""), "Qty":o.quantity||1, "Status":o.status, "Priority":o.priority, "Est Delivery":fmtD(o.expected_delivery), "Amount":o.estimated_value||0}));
+  const headers=["Order#","Customer","Phone","Device","Qty","Status","Priority","Assigned To","Est Delivery","Amount"];
+  const data=rows.map(o=>({"Order#":o.order_number,"Customer":o.customer_name,"Phone":o.phone||"", "Device":(o.device_type||"")+" "+(o.device_brand||""), "Qty":o.quantity||1, "Status":o.status, "Priority":o.priority, "Assigned To":o.assignee||"", "Est Delivery":fmtD(o.expected_delivery), "Amount":o.estimated_value||0}));
   exportToCSV(headers,data,"orders");
 }
 async function orderForm(id, preselectCustomerId){
@@ -1941,11 +1945,11 @@ async function orderForm(id, preselectCustomerId){
   };
 }
 async function viewOrder(id){
-  const o=await q1("SELECT * FROM orders WHERE id=?",[id]); if(!o) return;
+  const o=await q1("SELECT o.*, u.full_name assignee FROM orders o LEFT JOIN users u ON u.id=o.assigned_to WHERE o.id=?",[id]); if(!o) return;
   let specs={}; try{ specs= o.specifications? JSON.parse(o.specifications):{}; }catch(e){}
   const acts=await q("SELECT a.*, u.full_name uname FROM order_activities a LEFT JOIN users u ON u.id=a.created_by WHERE a.order_id=? ORDER BY a.created_at DESC",[id]);
   const statusColor={new:"#3b82f6",confirmed:"#6366f1",assembling:"#f59e0b",testing:"#eab308",ready:"#14b8a6",delivered:"#22c55e",cancelled:"#ef4444"};
-  openModal(modalHead("Order "+o.order_number+" "+badge(o.status))+modalBody(`
+  openModal(modalHead("Order "+esc(o.order_number)+" "+badge(o.status),true)+modalBody(`
     <div style="background:${statusColor[o.status]||'#6b7280'}15;border:1px solid ${statusColor[o.status]||'#6b7280'};border-radius:8px;padding:8px;display:flex;justify-content:space-between;align-items:center"><span style="color:${statusColor[o.status]||'#6b7280'};font-weight:800">${esc((o.status||'').replace(/_/g,' '))}</span><span style="font-size:11px">Priority: ${badge(o.priority||'medium')} &nbsp; Source: ${esc(o.source||'')}</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
       <div><b>Order#</b>: ${esc(o.order_number)}</div><div><b>Created</b>: ${fmtDT(o.created_at)}</div>
@@ -1953,12 +1957,13 @@ async function viewOrder(id){
       <div><b>Email</b>: ${esc(o.email||'-')}</div><div><b>Address</b>: ${esc(o.address||'-')}</div>
       <div><b>Device</b>: ${esc(o.device_type||'')}</div><div><b>Brand</b>: ${esc(o.device_brand||'')}</div>
       <div><b>Model</b>: ${esc(o.device_model||'')}</div><div><b>Qty</b>: ${o.quantity||1}</div>
+      <div><b>Assigned To</b>: ${o.assignee?esc(o.assignee):'<span style="color:#999">Unassigned</span>'}</div><div><b>Expected Delivery</b>: ${o.expected_delivery?fmtD(o.expected_delivery):'-'}</div>
     </div>
     <div style="margin-top:10px"><b>Specifications</b><div style="background:var(--bg-secondary);padding:8px;border-radius:6px;font-size:12px">${["cpu","ram","storage","gpu","screen","condition"].map(k=>specs[k]?`<div><b>${k.toUpperCase()}:</b> ${esc(specs[k])}</div>`:'').join("")}${specs.extras?`<div><b>Extras:</b> ${esc(specs.extras)}</div>`:''}</div></div>
     ${o.requirement?`<div style="margin-top:8px"><b>Requirement:</b><div style="background:var(--bg-secondary);padding:8px;border-radius:6px">${esc(o.requirement)}</div></div>`:''}
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px"><div><b>Estimated</b>: ${fmtMoney(o.estimated_value||0)}</div><div><b>Advance</b>: ${fmtMoney(o.advance_paid||0)}</div><div><b>Balance</b>: ${fmtMoney((o.estimated_value||0)-(o.advance_paid||0))}</div></div>
     ${o.notes?`<div style="margin-top:8px"><b>Notes:</b> ${esc(o.notes)}</div>`:''}
-    ${o.status!=="delivered"&&o.status!=="cancelled"?`<div style="margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px"><b>Update Status</b><div style="display:flex;gap:6px;margin-top:6px"><select class="select" id="od-new-status"><option value="confirmed">confirmed</option><option value="assembling">assembling</option><option value="testing">testing</option><option value="ready">ready</option><option value="delivered">delivered</option><option value="cancelled">cancelled</option></select><input class="input" id="od-status-note" placeholder="Note for status change (required)" style="flex:1"><button class="btn primary" onclick="updateOrderStatus(${o.id})">Update</button></div></div>`:''}
+    ${o.status!=="delivered"&&o.status!=="cancelled"?`<div style="margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px"><b>Update Status</b><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:stretch"><select class="select" id="od-new-status" style="flex:0 0 160px;width:160px"><option value="confirmed" ${o.status==="confirmed"?"selected":""}>confirmed</option><option value="assembling" ${o.status==="assembling"?"selected":""}>assembling</option><option value="testing" ${o.status==="testing"?"selected":""}>testing</option><option value="ready" ${o.status==="ready"?"selected":""}>ready</option><option value="delivered">delivered</option><option value="cancelled">cancelled</option></select><input class="input" id="od-status-note" placeholder="Note for status change (required)" style="flex:1;min-width:200px"><button class="btn primary" style="flex:0 0 auto" onclick="updateOrderStatus(${o.id})">Update</button></div></div>`:''}
     <div style="margin-top:12px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px"><b>💬 Comment</b><div style="display:flex;gap:6px;margin-top:6px"><input class="input" id="od-comment" placeholder="Type a comment..." style="flex:1"><button class="btn" onclick="addOrderComment(${o.id})">Add</button></div></div>
     ${o.status==="delivered"?'<div style="margin-top:12px;text-align:center"><button class="btn" style="background:#22c55e;color:white;padding:8px 16px;border-radius:6px" onclick="printOrderDeliverySlip('+o.id+')">Print Delivery Slip</button></div>':''}
     <div style="margin-top:12px"><b>Activity Timeline</b><div style="max-height:200px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:6px">${acts.map(a=>{
@@ -3016,7 +3021,7 @@ async function viewInvoice(id){
   if(!inv) return;
   const items=await q("SELECT * FROM invoice_items WHERE invoice_id=?",[id]);
   const payments=await q("SELECT * FROM payments WHERE invoice_id=?",[id]);
-  openModal(modalHead("Invoice "+inv.invoice_number+" "+badge(inv.payment_status))+modalBody(`
+  openModal(modalHead("Invoice "+esc(inv.invoice_number)+" "+badge(inv.payment_status),true)+modalBody(`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       <div><b>Customer:</b> ${esc(inv.cname||'-')}</div><div><b>Phone:</b> ${esc(inv.cphone||'-')}</div>
       <div><b>Date:</b> ${fmtD(inv.invoice_date)}</div><div><b>Total:</b> ${fmtMoney(inv.grand_total||0)}</div>
